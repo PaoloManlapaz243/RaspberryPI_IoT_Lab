@@ -7,8 +7,8 @@ model = YOLO("./yolo11n_ncnn_model")
 
 # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
 # Change the index to 1 or 2 if video0 doesn't display your webcam
-cap = cv2.VideoCapture(0)
-#cap = cv2.VideoCapture("Golden.webm")
+#cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture("Golden.webm")
 
 # Optional: Set preferred frame width and height
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
