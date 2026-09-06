@@ -1,9 +1,14 @@
 import time
 import cv2
+from ultralytics import YOLO
+
+# 1. Load the exported NCNN model directory
+model = YOLO("./yolo11n_ncnn_model")
 
 # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
 # Change the index to 1 or 2 if video0 doesn't display your webcam
 cap = cv2.VideoCapture(0)
+#cap = cv2.VideoCapture("Golden.webm")
 
 # Optional: Set preferred frame width and height
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -28,6 +33,12 @@ while True:
     if not ret:
         print("Error: Failed to grab frame.")
         break
+
+    # 3. Run NCNN inference (imgsz=320 matches our export size)
+    results = model(frame, imgsz=320, conf=0.3, verbose=False)
+
+    # 4. Render bounding boxes onto the frame
+    frame = results[0].plot()
 
     # If a new frame is successfully obtained, get the time for the new frame
     new_frame = time.time_ns();
