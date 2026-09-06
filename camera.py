@@ -1,3 +1,4 @@
+import time
 import cv2
 
 # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
@@ -15,6 +16,10 @@ if not cap.isOpened():
 
 print("Streaming started. Press 'q' to quit.")
 
+#logic for FPS counter on screen
+last_frame = time.time_ns(); #time since jan 1st, 1970. Actual value doesn't matter, what is needed is resolution
+
+
 while True:
     # Capture frame-by-frame
     ret, frame = cap.read()
@@ -23,6 +28,19 @@ while True:
     if not ret:
         print("Error: Failed to grab frame.")
         break
+
+    # If a new frame is successfully obtained, get the time for the new frame
+    new_frame = time.time_ns();
+    ns_since_last_frame = new_frame - last_frame;
+    s_since_last_frame = ns_since_last_frame / 1e9; 
+    fps = round(1/s_since_last_frame,2); #T=1/f
+
+    #update last frame time
+    last_frame = new_frame;
+
+    #write to frame
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(frame,"fps: " + str(fps),(500,20), font, 1,(255,255,255),2,cv2.LINE_AA)
 
     # Display the live stream in a window
     cv2.imshow('Baddie Alert', frame)
