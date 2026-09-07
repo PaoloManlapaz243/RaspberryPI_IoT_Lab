@@ -7,7 +7,7 @@ class RasPiDeploy:
     def __init__(self, src=0, model_dir = "./yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
 
         # Load the exported NCNN model directory
-        self.model = YOLO(model_dir)
+        self.model = YOLO(model_dir, task = 'detect')
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
@@ -17,8 +17,6 @@ class RasPiDeploy:
         if not self.cap.isOpened():
             print("Error: Could not open USB camera")
             exit()
-
-
 
         # Optional: Set preferred frame width and height
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, height)
@@ -80,7 +78,7 @@ class RasPiDeploy:
                 self.camera_frame = None
 
             # sleep to avoid CPU thrasing
-            if not self.performInference:
+            if not self.perform_Inference:
                 time.sleep(0.001)
                 continue
 
