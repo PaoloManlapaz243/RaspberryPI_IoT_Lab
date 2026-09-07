@@ -19,8 +19,8 @@ class RasPiDeploy:
             exit()
 
         # Optional: Set preferred frame width and height
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, height)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
         #Global data to pass
         self.conf_thresh = conf_thresh
@@ -145,6 +145,6 @@ class RasPiDeploy:
 
 
 if __name__ == "__main__":
-    program = RasPiDeploy(src = 0)
+    program = RasPiDeploy(src = 1)
     program.run()
     
