@@ -5,7 +5,7 @@ from ultralytics import YOLO
 from tinydb import TinyDB
 
 #Rate Limiting DB Logging (write every 3 seconds)
-LOG_INTERVAL_SEC = 3.0
+LOG_INTERVAL_SEC = 0.5
 
 class RasPiDeploy:
     def __init__(self, src=0, model_dir = "./yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
@@ -16,6 +16,7 @@ class RasPiDeploy:
         #db logs
         self.db = TinyDB("camera_logs.json")
         self.memory_queue = []
+        self.last_logged_frame_timestamp = time.time()
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
@@ -77,7 +78,6 @@ class RasPiDeploy:
 
     def task_inference(self):
         while not self.stopped:
-            self.last_logged_frame_timestamp = time.time()
 
             #obtain the mutex to check the primitive variables
             with self.lock:
@@ -122,6 +122,9 @@ class RasPiDeploy:
                 #insert objects
                 self.db.insert_multiple(self.memory_queue)
                 self.memory_queue.clear()
+
+                #update last timestamp
+                self.last_logged_frame_timestamp = time.time()
                     
 
             with self.lock:
