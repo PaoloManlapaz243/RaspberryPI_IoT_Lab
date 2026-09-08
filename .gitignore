@@ -1,3 +1,9 @@
 .git
 .venv
 yolo11n_ncnn_model/
+detector-01-Policy
+detector-01.cert.pem
+detector-01.private.key
+detector-01.public.key
+connect_device_package.zip
+start.sh
