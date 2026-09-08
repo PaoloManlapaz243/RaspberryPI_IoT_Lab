@@ -2,12 +2,20 @@ import time
 import threading
 import cv2
 from ultralytics import YOLO
+from tinydb import TinyDB
+
+#Rate Limiting DB Logging (write every 3 seconds)
+LOG_INTERVAL_SEC = 3.0
 
 class RasPiDeploy:
     def __init__(self, src=0, model_dir = "./yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
 
         # Load the exported NCNN model directory
         self.model = YOLO(model_dir, task = 'detect')
+
+        #db logs
+        self.db = TinyDB("camera_logs.json")
+        self.memory_queue = []
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
@@ -19,6 +27,7 @@ class RasPiDeploy:
             exit()
 
         # Optional: Set preferred frame width and height
+        #self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
@@ -65,8 +74,11 @@ class RasPiDeploy:
                 time.sleep(0.001)
 
 
+
     def task_inference(self):
         while not self.stopped:
+            self.last_logged_frame_timestamp = time.time()
+
             #obtain the mutex to check the primitive variables
             with self.lock:
                 #read in the new camera frame, set a local flag to use outside lock
@@ -82,8 +94,35 @@ class RasPiDeploy:
                 time.sleep(0.001)
                 continue
 
-            self.inference_results = self.model(self.frame_to_inference, imgsz = 320, conf = self.conf_thresh, verbose = False)
+            self.inference_results = self.model(self.frame_to_inference, imgsz = 320, conf = self.conf_thresh, device='cpu', verbose = False)
             self.inference_plotted = self.inference_results[0].plot()
+
+            #if sufficient time since the last data log
+            current_time = time.time()
+            if current_time - self.last_logged_frame_timestamp >= LOG_INTERVAL_SEC:
+                #append to the log
+                timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time))
+                detections = []
+
+                for result in self.inference_results:
+                    for box in result.boxes:
+                        detections.append(
+                            {
+                                "label": self.model.names[int(box.cls)],
+                                "confidence": round(float(box.conf), 2),
+                            }
+                        )
+
+                # Append to memory queue if objects are found
+                if detections:
+                    self.memory_queue.append(
+                        {"timestamp": timestamp, "detections": detections}
+                    )
+
+                #insert objects
+                self.db.insert_multiple(self.memory_queue)
+                self.memory_queue.clear()
+                    
 
             with self.lock:
                 #save the new frame and mark the new frame as complete
@@ -136,6 +175,11 @@ class RasPiDeploy:
             # Wait for 1 millisecond; if 'q' key is pressed, exit the loop
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 self.stopped = True
+
+        # Flush any remaining items in the queue before shutting down
+        if self.memory_queue:
+            self.db.insert_multiple(memory_queue)
+            print("--> Flushed final remaining entries to TinyDB")
 
         # Clean up: End tasks, Release the camera hardware and destroy open windows
         self.t_camera.join()
