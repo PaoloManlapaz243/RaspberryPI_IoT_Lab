@@ -3,7 +3,7 @@
 ```shell
 python3 -m venv .venv
 source .venv/bin/activate
-pip install opencv-python ultralytics ncnn
+pip install opencv-python ultralytics ncnn tinydb paho-mqtt
 ```
 # 2. Run ncnn_export.py
 ```shell

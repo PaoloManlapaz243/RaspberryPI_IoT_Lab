@@ -3,6 +3,7 @@ import threading
 import cv2
 from ultralytics import YOLO
 from tinydb import TinyDB
+from aws_publisher import AWSPublisher
 
 #Rate Limiting DB Logging (write every 3 seconds)
 LOG_INTERVAL_SEC = 0.5
@@ -17,6 +18,16 @@ class RasPiDeploy:
         self.db = TinyDB("camera_logs.json")
         self.memory_queue = []
         self.last_logged_frame_timestamp = time.time()
+
+        #aws logging
+        self.cloud = AWSPublisher(
+        endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
+        ca_path="AmazonRootCA1.pem",
+        cert_path="device.pem.crt",
+        key_path="private.pem.key",
+        sensor_id="S1",
+        client_id="laptop-dev",   # give the Pi a DIFFERENT id later
+)
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
@@ -115,9 +126,9 @@ class RasPiDeploy:
 
                 # Append to memory queue if objects are found
                 if detections:
-                    self.memory_queue.append(
-                        {"timestamp": timestamp, "detections": detections}
-                    )
+                    event = {"timestamp": timestamp, "detections": detections}
+                    self.memory_queue.append(event)
+                    self.cloud.publish(event)          # <-- same event, straight to AWS
 
                 #insert objects
                 self.db.insert_multiple(self.memory_queue)
@@ -185,6 +196,7 @@ class RasPiDeploy:
             print("--> Flushed final remaining entries to TinyDB")
 
         # Clean up: End tasks, Release the camera hardware and destroy open windows
+        self.cloud.close()
         self.t_camera.join()
         self.t_inference.join()
         self.cap.release()
