@@ -32,7 +32,8 @@ class RasPiDeploy:
             cert_path="detector-01.cert.pem",
             key_path="detector-01.private.key",
             sensor_id="S1",
-            client_id="laptop-dev",   # give the Pi a DIFFERENT id later
+            #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
+            client_id = "detector-01"
         )
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
