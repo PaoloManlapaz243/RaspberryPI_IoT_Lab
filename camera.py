@@ -1,12 +1,14 @@
+import os
 import time
 import threading
 import cv2
 from ultralytics import YOLO
 from tinydb import TinyDB
 from aws_publisher import AWSPublisher
+#frdaom dotenv impoasdasrt AWS_ENDPOINT
 
 #Rate Limiting DB Logging (write every 3 seconds)
-LOG_INTERVAL_SEC = 0.5
+LOG_INTERVAL_SEC = 5.0
 
 class RasPiDeploy:
     def __init__(self, src=0, model_dir = "./yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
@@ -21,13 +23,17 @@ class RasPiDeploy:
 
         #aws logging
         self.cloud = AWSPublisher(
-        endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
-        ca_path="AmazonRootCA1.pem",
-        cert_path="device.pem.crt",
-        key_path="private.pem.key",
-        sensor_id="S1",
-        client_id="laptop-dev",   # give the Pi a DIFFERENT id later
-)
+            #endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
+            #endpoint = AWS_ENDPOINT,
+            endpoint = "alqw25622p8x0-ats.iot.us-east-2.amazonaws.com",
+            ca_path="AmazonRootCA1.pem",
+            # cert_path="device.pem.crt",
+            # key_path="private.pem.key",
+            cert_path="detector-01.cert.pem",
+            key_path="detector-01.private.key",
+            sensor_id="S1",
+            client_id="laptop-dev",   # give the Pi a DIFFERENT id later
+        )
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
@@ -192,7 +198,7 @@ class RasPiDeploy:
 
         # Flush any remaining items in the queue before shutting down
         if self.memory_queue:
-            self.db.insert_multiple(memory_queue)
+            self.db.insert_multiple(self.memory_queue)
             print("--> Flushed final remaining entries to TinyDB")
 
         # Clean up: End tasks, Release the camera hardware and destroy open windows
