@@ -16,3 +16,6 @@ python3 ncnn_export.py
 ```shell
 python3 camera.py
 ```
+
+# 4. Do all the DynamoDB/IoT Core setup
+sorry gang, you're on your own
