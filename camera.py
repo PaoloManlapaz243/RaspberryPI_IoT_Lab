@@ -33,12 +33,12 @@ class RasPiDeploy:
             key_path="detector-01.private.key",
             sensor_id="S1",
             #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
-            client_id = "detector-01"
+            client_id = "laptop-03"
         )
 
         # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
         # Change the index to 1 or 2 if video0 doesn't display your webcam
-        self.cap = cv2.VideoCapture(src)
+        self.cap = cv2.VideoCapture(0)
 
         # Check if the webcam opened successfully
         if not self.cap.isOpened():
