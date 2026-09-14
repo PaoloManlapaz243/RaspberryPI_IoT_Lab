@@ -11,13 +11,13 @@ from aws_publisher import AWSPublisher
 LOG_INTERVAL_SEC = 5.0
 
 class RasPiDeploy:
-    def __init__(self, src=0, model_dir = "./yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
+    def __init__(self, src=0, model_dir = "../models/yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
 
         # Load the exported NCNN model directory
         self.model = YOLO(model_dir, task = 'detect')
 
         #db logs
-        self.db = TinyDB("camera_logs.json")
+        self.db = TinyDB("logs/camera_logs.json")
         self.memory_queue = []
         self.last_logged_frame_timestamp = time.time()
 
@@ -26,11 +26,9 @@ class RasPiDeploy:
             #endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
             #endpoint = AWS_ENDPOINT,
             endpoint = "alqw25622p8x0-ats.iot.us-east-2.amazonaws.com",
-            ca_path="AmazonRootCA1.pem",
-            # cert_path="device.pem.crt",
-            # key_path="private.pem.key",
-            cert_path="detector-01.cert.pem",
-            key_path="detector-01.private.key",
+            ca_path="certs/AmazonRootCA1.pem",
+            cert_path="certs/detector-01.cert.pem",
+            key_path="certs/detector-01.private.key",
             sensor_id="S1",
             #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
             client_id = "detector-01"
