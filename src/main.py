@@ -5,153 +5,154 @@ import cv2
 from ultralytics import YOLO
 from tinydb import TinyDB
 from aws_publisher import AWSPublisher
+
+import queue
 #frdaom dotenv impoasdasrt AWS_ENDPOINT
+
+from threads.camera import CameraHandler
+from threads.object_detection import InferenceHandler
+from gui_handler import GUIHandler
+
+
 
 #Rate Limiting DB Logging (write every 3 seconds)
 LOG_INTERVAL_SEC = 5.0
+
+#Set True for headless setup for greater performance
+HEADLESS = False
 
 class RasPiDeploy:
     def __init__(self, src=0, model_dir = "../models/yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
 
         # Load the exported NCNN model directory
-        self.model = YOLO(model_dir, task = 'detect')
+        #self.model = YOLO(model_dir, task = 'detect')
 
         #db logs
-        self.db = TinyDB("logs/camera_logs.json")
-        self.memory_queue = []
-        self.last_logged_frame_timestamp = time.time()
+        #self.db = TinyDB("logs/camera_logs.json")
+        #self.memory_queue = []
+        #self.last_logged_frame_timestamp = time.time()
 
         #aws logging
-        self.cloud = AWSPublisher(
-            #endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
-            #endpoint = AWS_ENDPOINT,
-            endpoint = "alqw25622p8x0-ats.iot.us-east-2.amazonaws.com",
-            ca_path="certs/AmazonRootCA1.pem",
-            cert_path="certs/detector-01.cert.pem",
-            key_path="certs/detector-01.private.key",
-            sensor_id="S1",
-            #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
-            client_id = "detector-01"
-        )
-
-        # Initialize the Logitech USB camera (0 corresponds to /dev/video0)
-        # Change the index to 1 or 2 if video0 doesn't display your webcam
-        self.cap = cv2.VideoCapture(src)
-
-        # Check if the webcam opened successfully
-        if not self.cap.isOpened():
-            print("Error: Could not open USB camera")
-            exit()
-
-        # Optional: Set preferred frame width and height
-        #self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # self.cloud = AWSPublisher(
+        #     #endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
+        #     #endpoint = AWS_ENDPOINT,
+        #     endpoint = "alqw25622p8x0-ats.iot.us-east-2.amazonaws.com",
+        #     ca_path="certs/AmazonRootCA1.pem",
+        #     cert_path="certs/detector-01.cert.pem",
+        #     key_path="certs/detector-01.private.key",
+        #     sensor_id="S1",
+        #     #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
+        #     client_id = "detector-01"
+        # )
 
         #Global data to pass
         self.conf_thresh = conf_thresh
 
         # Thread lock and stop
         self.lock = threading.Lock()
-        self.stopped = False
 
-        # Thread management state logic
-        # For AI Inference Task
-        # bool camera_frame_ready
-        # Frame camera_frame
-        # For GUI Display Task
-        # bool AI_frame_ready
-        # Frame AI_frame
-
-        self.camera_frame_ready = False
-        self.camera_frame = None
-        self.inference_frame_ready = False
-        self.inference_frame = None
+        # New Event-based locking
+        self.stop_event = threading.Event()
+        self.stop_event.clear()
 
 
-    def task_camera(self):
-        while not self.stopped:
+        #Thread-safe datastructure
+        self.queue = queue.Queue()
+        
+        #Threaded State Variables
+        self.camera_frame_ready = threading.Event()
+        self.inference_frame_ready = threading.Event()
+        self.camera_frame_ready.clear()
+        self.inference_frame_ready.clear()
 
-            #attempt to get camera output
-            #attempting this outside of lock to avoid using CPU time
-            ret, frame = self.cap.read()
+        #Initialize Camera Handler
+        self.camera = CameraHandler(
+            self.camera_frame_ready, 
+            self.stop_event, 
+            src, 
+            width, 
+            height
+        )
 
-            #enter lock to modify state variables using with keyword
-            with self.lock:
-                # if successfully got a frame from the USB camera
-                if ret:
-                    self.camera_frame_ready = True
-                    self.camera_frame = frame
-                else:
-                    self.camera_frame_ready = False
-                    self.camera_frame = None
+        #Initialize Inference Handler
+        self.object_detect = InferenceHandler(
+            self.camera_frame_ready,
+            self.inference_frame_ready,
+            self.stop_event,
+            self.queue,
+            model_dir,
+            self.camera,
+            conf_thresh
+        )
 
-            # small delay to avoid CPU thrasing
-            if not ret:
-                time.sleep(0.001)
+        #Initialize GUI Handler
+        self.gui = GUIHandler(
+            self.inference_frame_ready,
+            self.stop_event
+        )
 
 
 
-    def task_inference(self):
-        while not self.stopped:
+    # def task_inference(self):
+    #     while not self.stopped:
 
-            #obtain the mutex to check the primitive variables
-            with self.lock:
-                #read in the new camera frame, set a local flag to use outside lock
-                self.perform_Inference = self.camera_frame_ready
-                self.frame_to_inference = self.camera_frame
+    #         #obtain the mutex to check the primitive variables
+    #         with self.lock:
+    #             #read in the new camera frame, set a local flag to use outside lock
+    #             self.perform_Inference = self.camera_frame_ready
+    #             self.frame_to_inference = self.camera_frame
 
-                #mark the current frame as processed
-                self.camera_frame_ready = False
-                self.camera_frame = None
+    #             #mark the current frame as processed
+    #             self.camera_frame_ready = False
+    #             self.camera_frame = None
 
-            # sleep to avoid CPU thrasing
-            if not self.perform_Inference:
-                time.sleep(0.001)
-                continue
+    #         # sleep to avoid CPU thrasing
+    #         if not self.perform_Inference:
+    #             time.sleep(0.001)
+    #             continue
 
-            self.inference_results = self.model(self.frame_to_inference, imgsz = 320, conf = self.conf_thresh, device='cpu', verbose = False)
-            self.inference_plotted = self.inference_results[0].plot()
+    #         self.inference_results = self.model(self.frame_to_inference, imgsz = 320, conf = self.conf_thresh, device='cpu', verbose = False)
+    #         self.inference_plotted = self.inference_results[0].plot()
 
-            #if sufficient time since the last data log
-            current_time = time.time()
-            if current_time - self.last_logged_frame_timestamp >= LOG_INTERVAL_SEC:
-                #append to the log
-                timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time))
-                detections = []
+    #         #if sufficient time since the last data log
+    #         current_time = time.time()
+    #         if current_time - self.last_logged_frame_timestamp >= LOG_INTERVAL_SEC:
+    #             #append to the log
+    #             timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time))
+    #             detections = []
 
-                for result in self.inference_results:
-                    for box in result.boxes:
-                        detections.append(
-                            {
-                                "label": self.model.names[int(box.cls)],
-                                "confidence": round(float(box.conf), 2),
-                            }
-                        )
+    #             for result in self.inference_results:
+    #                 for box in result.boxes:
+    #                     detections.append(
+    #                         {
+    #                             "label": self.model.names[int(box.cls)],
+    #                             "confidence": round(float(box.conf), 2),
+    #                         }
+    #                     )
 
-                # Append to memory queue if objects are found
-                if detections:
-                    event = {"timestamp": timestamp, "detections": detections}
-                    self.memory_queue.append(event)
-                    self.cloud.publish(event)          # <-- same event, straight to AWS
+    #             # Append to memory queue if objects are found
+    #             if detections:
+    #                 event = {"timestamp": timestamp, "detections": detections}
+    #                 self.memory_queue.append(event)
+    #                 self.cloud.publish(event)          # <-- same event, straight to AWS
 
-                #insert objects
-                self.db.insert_multiple(self.memory_queue)
-                self.memory_queue.clear()
+    #             #insert objects
+    #             self.db.insert_multiple(self.memory_queue)
+    #             self.memory_queue.clear()
 
-                #update last timestamp
-                self.last_logged_frame_timestamp = time.time()
+    #             #update last timestamp
+    #             self.last_logged_frame_timestamp = time.time()
                     
 
-            with self.lock:
-                #save the new frame and mark the new frame as complete
-                self.inference_frame_ready = True
-                self.inference_frame = self.inference_plotted
+    #         with self.lock:
+    #             #save the new frame and mark the new frame as complete
+    #             self.inference_frame_ready = True
+    #             self.inference_frame = self.inference_plotted
 
     def run(self):
 
-        self.t_camera = threading.Thread(target = self.task_camera, daemon = True)
-        self.t_inference = threading.Thread(target = self.task_inference, daemon = True)
+        self.t_camera = threading.Thread(target = self.camera.task_camera, daemon = True)
+        self.t_inference = threading.Thread(target = self.object_detect.task_inference, daemon = True)
         self.t_camera.start()
         self.t_inference.start()
 
@@ -159,56 +160,44 @@ class RasPiDeploy:
         print("Program Starting. Press 'q' to quit.")
 
         #logic for FPS counter on screen
-        self.last_frame = time.time_ns(); #time since jan 1st, 1970. Actual value doesn't matter, what is needed is resolution
+        #time since jan 1st, 1970. Actual value doesn't matter, what is needed is resolution
+        last_frame_time_ns = time.time_ns()
+
+        while not self.stop_event.is_set():
+
+            if not HEADLESS:
+                if self.inference_frame_ready.is_set():
+
+                    #frame_time_calculation
+                    new_frame_time_ns = time.time_ns()
+                    frame_period_s = (new_frame_time_ns - last_frame_time_ns)/1e9
+                    frame_freq = 1 / frame_period_s
+
+                    last_frame_time_ns = new_frame_time_ns
 
 
-        while not self.stopped:
-            with self.lock:
-                #read in the new inference frame
-                self.perform_draw_frame = self.inference_frame_ready
-                self.draw_frame = self.inference_frame
-
-                #mark the frame as processed
-                self.inference_frame_ready = False
-                self.inference_frame = None
-
-            if not self.perform_draw_frame:
-                time.sleep(0.001)
-                continue
-            
-            # If a new frame is successfully obtained, get the time for the new frame
-            self.new_frame = time.time_ns();
-            self.s_since_last_frame = (self.new_frame - self.last_frame) / 1e9; 
-            self.fps = round(1/self.s_since_last_frame,2); #T=1/f
-
-            #update last frame time
-            self.last_frame = self.new_frame;
-
-            #write to frame
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(self.draw_frame,"fps: " + str(self.fps),(500,20), font, 1,(255,255,255),2,cv2.LINE_AA)
-
-            # Display the live stream in a window
-            cv2.imshow('Baddie Alert', self.draw_frame)
+                    #Call GUI display
+                    self.gui.display_GUI(self.object_detect.getInferencePlot(), frame_freq)
 
             # Wait for 1 millisecond; if 'q' key is pressed, exit the loop
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 self.stopped = True
 
+            time.sleep(0.001)
+
         # Flush any remaining items in the queue before shutting down
-        if self.memory_queue:
-            self.db.insert_multiple(self.memory_queue)
-            print("--> Flushed final remaining entries to TinyDB")
+        # if self.memory_queue:
+        #     self.db.insert_multiple(self.memory_queue)
+        #     print("--> Flushed final remaining entries to TinyDB")
 
         # Clean up: End tasks, Release the camera hardware and destroy open windows
-        self.cloud.close()
+        #self.cloud.close()
         self.t_camera.join()
         self.t_inference.join()
-        self.cap.release()
         cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    program = RasPiDeploy(src = 1)
+    program = RasPiDeploy(src = 0)
     program.run()
     
