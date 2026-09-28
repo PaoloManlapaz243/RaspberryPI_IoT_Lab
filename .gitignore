@@ -2,6 +2,9 @@
 .venv
 .env
 certs/
+logs/*.db
+logs/*.db-wal
+logs/*.db-shm
 yolo11n_ncnn_model/
 detector-01-Policy
 detector-01.cert.pem
