@@ -48,6 +48,13 @@ Key design points:
 - `sensor_id` is added to every MQTT payload because it is the DynamoDB
   partition key.
 
+## Architecture decisions
+Recorded as ADRs in `docs/adr/` (numbered, one decision per file). Read them
+before changing the pipeline, and add a new ADR for any new architectural
+decision rather than editing an accepted one.
+- `0001-event-pipeline.md`: queue + dedicated logging thread, events written
+  as they arrive, enter/exit track events, SQLite in WAL mode; event bus planned.
+
 ## Current state (in progress)
 - Migrating logging from TinyDB to SQLite; the logging thread isn't started yet.
 - AWS publishing is commented out in `main.py`. The endpoint belongs in `.env`
