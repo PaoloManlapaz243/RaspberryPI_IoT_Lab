@@ -39,7 +39,7 @@ class InferenceHandler():
 
         while not self.stopped.is_set():
             if not self.camera_frame_ready.is_set():
-                self.camera_frame_ready.wait()
+                self.camera_frame_ready.wait(timeout=0.1)
                 continue
 
             # self.inference_results = self.model(
