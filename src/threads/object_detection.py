@@ -54,6 +54,8 @@ class InferenceHandler():
             if frame is None:
                 continue
 
+            self.camera_frame_ready.clear()
+
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 

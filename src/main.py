@@ -175,10 +175,11 @@ class RasPiDeploy:
 
                     #Call GUI display
                     self.gui.display_GUI(self.object_detect.getInferencePlot(), frame_freq)
+                    self.inference_frame_ready.clear()
 
             # Wait for 1 millisecond; if 'q' key is pressed, exit the loop
             if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.stopped = True
+                self.stop_event.set()
 
             time.sleep(0.001)
 
