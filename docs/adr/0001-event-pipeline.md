@@ -48,8 +48,13 @@ CameraHandler -> InferenceHandler --queue.Queue--> Logging thread -> SQLite (WAL
    logging thread writes.
 6. **The logging thread owns its SQLite connection.** It opens the connection
    inside its task, because `sqlite3` connections are tied to the thread that
-   created them. It uses `queue.get(timeout=...)` so it notices shutdown, and
-   writes whatever is still queued before exiting.
+   created them.
+7. **Shut down with a sentinel, not `stop_event`.** `main` stops the camera and
+   inference threads first (inference emits `exit` for every remaining track),
+   then puts a `None` sentinel on the queue. The queue is FIFO, so the writer
+   writes everything ahead of the sentinel before it closes the DB. The writer
+   can therefore use a plain blocking `queue.get()`. *(Amended during
+   implementation; this replaces the original `queue.get(timeout=...)` plan.)*
 
 ## Future direction: Option C (event bus)
 
