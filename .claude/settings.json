@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(python -m py_compile *)",
+      "Bash(.venv/bin/python -m py_compile *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./certs/**)",
+      "Read(./**/*.key)",
+      "Read(./**/*.pem)",
+      "Read(./connect_device_package.zip)"
+    ]
+  }
+}

@@ -56,6 +56,7 @@ import json
 import ssl
 import time
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 
 
 class AWSPublisher:
@@ -72,7 +73,7 @@ class AWSPublisher:
         self.connected = False
 
         self.client = mqtt.Client(
-            mqtt.CallbackAPIVersion.VERSION2,
+            CallbackAPIVersion.VERSION2,
             client_id=client_id,
         )
         self.client.on_connect = self._on_connect

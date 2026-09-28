@@ -3,7 +3,7 @@
 ```shell
 python3 -m venv .venv
 source .venv/bin/activate
-pip install opencv-python ultralytics ncnn tinydb paho-mqtt python-dotenv
+pip install opencv-python ultralytics ncnn tinydb paho-mqtt python-dotenv pandas
 chmod +x start.sh
 ./start.sh
 ```
