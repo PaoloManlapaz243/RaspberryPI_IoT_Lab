@@ -3,20 +3,23 @@ import time
 import threading
 import cv2
 from ultralytics import YOLO
-from tinydb import TinyDB
 from aws_publisher import AWSPublisher
 
 import queue
 #frdaom dotenv impoasdasrt AWS_ENDPOINT
 
 from threads.camera import CameraHandler
-from threads.object_detection import InferenceHandler
+from threads.object_detection import InferenceHandler, utc_timestamp
+from threads.event_writer import EventWriter
 from gui_handler import GUIHandler
 
 
 
-#Rate Limiting DB Logging (write every 3 seconds)
-LOG_INTERVAL_SEC = 5.0
+#SQLite event log (relative to src/, like the model path)
+DB_PATH = "../logs/events.db"
+
+#Identifies this device; also the DynamoDB partition key
+SENSOR_ID = "S1"
 
 #Set True for headless setup for greater performance
 HEADLESS = False
@@ -53,8 +56,11 @@ class RasPiDeploy:
         self.stop_event.clear()
 
 
-        #Thread-safe datastructure
+        #Thread-safe datastructure: detection events, inference -> event writer
         self.queue = queue.Queue()
+
+        #Tracker IDs restart at 1 every run; (run_id, track_id) identifies a track
+        self.run_id = utc_timestamp()
         
         #Threaded State Variables
         self.camera_frame_ready = threading.Event()
@@ -79,8 +85,13 @@ class RasPiDeploy:
             self.queue,
             model_dir,
             self.camera,
-            conf_thresh
+            conf_thresh,
+            sensor_id = SENSOR_ID,
+            run_id = self.run_id
         )
+
+        #Initialize Event Writer (opens the DB inside its own thread)
+        self.event_writer = EventWriter(self.queue, DB_PATH)
 
         #Initialize GUI Handler
         self.gui = GUIHandler(
@@ -150,11 +161,23 @@ class RasPiDeploy:
 
         self.t_camera = threading.Thread(target = self.camera.task_camera, daemon = True)
         self.t_inference = threading.Thread(target = self.object_detect.task_inference, daemon = True)
+        self.t_writer = threading.Thread(target = self.event_writer.task_writer, daemon = True)
+        self.t_writer.start()
         self.t_camera.start()
         self.t_inference.start()
 
         #Display message that the program was able to start tasks
-        print("Program Starting. Press 'q' to quit.")
+        print(f"Program Starting (run_id {self.run_id}). Press 'q' (or Ctrl+C) to quit.")
+
+        try:
+            self._main_loop()
+        except KeyboardInterrupt:
+            #Ctrl+C lands on the main thread; fall through to the clean shutdown
+            pass
+        finally:
+            self.shutdown()
+
+    def _main_loop(self):
 
         #logic for FPS counter on screen
         #time since jan 1st, 1970. Actual value doesn't matter, what is needed is resolution
@@ -183,16 +206,20 @@ class RasPiDeploy:
 
             time.sleep(0.001)
 
-        # Flush any remaining items in the queue before shutting down
-        # if self.memory_queue:
-        #     self.db.insert_multiple(self.memory_queue)
-        #     print("--> Flushed final remaining entries to TinyDB")
-
-        # Clean up: End tasks, Release the camera hardware and destroy open windows
-        #self.cloud.close()
+    def shutdown(self):
+        #Order matters (docs/adr/0001-event-pipeline.md):
+        #1. stop producers; inference emits exit events for remaining tracks
+        self.stop_event.set()
         self.t_camera.join()
         self.t_inference.join()
+
+        #2. only now queue the sentinel, so those final exits are written first
+        self.event_writer.stop()
+        self.t_writer.join()
+
+        #self.cloud.close()
         cv2.destroyAllWindows()
+        print("Shutdown complete.")
 
 
 if __name__ == "__main__":
