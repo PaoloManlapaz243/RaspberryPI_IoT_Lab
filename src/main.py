@@ -115,63 +115,6 @@ class RasPiDeploy:
         )
 
 
-
-    # def task_inference(self):
-    #     while not self.stopped:
-
-    #         #obtain the mutex to check the primitive variables
-    #         with self.lock:
-    #             #read in the new camera frame, set a local flag to use outside lock
-    #             self.perform_Inference = self.camera_frame_ready
-    #             self.frame_to_inference = self.camera_frame
-
-    #             #mark the current frame as processed
-    #             self.camera_frame_ready = False
-    #             self.camera_frame = None
-
-    #         # sleep to avoid CPU thrasing
-    #         if not self.perform_Inference:
-    #             time.sleep(0.001)
-    #             continue
-
-    #         self.inference_results = self.model(self.frame_to_inference, imgsz = 320, conf = self.conf_thresh, device='cpu', verbose = False)
-    #         self.inference_plotted = self.inference_results[0].plot()
-
-    #         #if sufficient time since the last data log
-    #         current_time = time.time()
-    #         if current_time - self.last_logged_frame_timestamp >= LOG_INTERVAL_SEC:
-    #             #append to the log
-    #             timestamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(current_time))
-    #             detections = []
-
-    #             for result in self.inference_results:
-    #                 for box in result.boxes:
-    #                     detections.append(
-    #                         {
-    #                             "label": self.model.names[int(box.cls)],
-    #                             "confidence": round(float(box.conf), 2),
-    #                         }
-    #                     )
-
-    #             # Append to memory queue if objects are found
-    #             if detections:
-    #                 event = {"timestamp": timestamp, "detections": detections}
-    #                 self.memory_queue.append(event)
-    #                 self.cloud.publish(event)          # <-- same event, straight to AWS
-
-    #             #insert objects
-    #             self.db.insert_multiple(self.memory_queue)
-    #             self.memory_queue.clear()
-
-    #             #update last timestamp
-    #             self.last_logged_frame_timestamp = time.time()
-                    
-
-    #         with self.lock:
-    #             #save the new frame and mark the new frame as complete
-    #             self.inference_frame_ready = True
-    #             self.inference_frame = self.inference_plotted
-
     def _make_publisher(self):
         if not ENABLE_AWS:
             print("[AWS] disabled (ENABLE_AWS = False); logging to SQLite only")
