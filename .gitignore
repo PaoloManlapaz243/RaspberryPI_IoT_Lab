@@ -1,6 +1,7 @@
 .git
 .venv
 .env
+certs/
 yolo11n_ncnn_model/
 detector-01-Policy
 detector-01.cert.pem

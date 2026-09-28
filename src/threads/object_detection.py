@@ -1,6 +1,7 @@
 import threading
 import queue
 import time
+import numpy as np
 from ultralytics import YOLO
 
 from threads.camera import CameraHandler
@@ -49,11 +50,15 @@ class InferenceHandler():
             #     verbose = False
             # )
             
+            frame = self.camera.get_frame()
+            if frame is None:
+                continue
+
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
             self.inference_results = self.model.track(
-                self.camera.get_frame(),
+                frame,
                 persist=True,
                 imgsz=320,
                 conf=self.conf_threshold,
@@ -67,16 +72,19 @@ class InferenceHandler():
             self.inference_frame_ready.set()
 
             # Check if any objects were detected and tracked
-            if self.inference_results[0].boxes.id is not None:
-                boxes = self.inference_results[0].boxes.xyxy.cpu().numpy()
-                track_ids = self.inference_results[0].boxes.id.cpu().numpy().astype(int)
-                clss = self.inference_results[0].boxes.cls.cpu().numpy().astype(int)
-                names = self.model.names
+            result_boxes = self.inference_results[0].boxes
+            if result_boxes is None or result_boxes.id is None:
+                continue
 
-                conf = self.inference_results[0].boxes.conf.cpu().numpy()
+            result_boxes = result_boxes.cpu().numpy()
+            boxes = np.asarray(result_boxes.xyxy)
+            track_ids = np.asarray(result_boxes.id).astype(int)
+            clss = np.asarray(result_boxes.cls).astype(int)
+            confs = np.asarray(result_boxes.conf)
+            names = self.model.names
 
             # 5. Process tracking states
-            for box, track_id, cls, conf in zip(boxes, track_ids, clss, conf):
+            for box, track_id, cls, conf in zip(boxes, track_ids, clss, confs):
                 class_name = names[cls]
 
                 # If this is a new object ID, log the initial detection
