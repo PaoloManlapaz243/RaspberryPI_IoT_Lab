@@ -7,11 +7,12 @@ from aws_publisher import AWSPublisher
 
 import queue
 from pathlib import Path
-#frdaom dotenv impoasdasrt AWS_ENDPOINT
+from dotenv import load_dotenv
 
 from threads.camera import CameraHandler
 from threads.object_detection import InferenceHandler, utc_timestamp
 from threads.event_writer import EventWriter
+from threads.aws_forwarder import AWSForwarder
 from gui_handler import GUIHandler
 
 
@@ -27,6 +28,17 @@ DB_PATH = str(PROJECT_ROOT / "logs" / "events.db")
 #Identifies this device; also the DynamoDB partition key
 SENSOR_ID = "S1"
 
+#AWS IoT Core upload (store-and-forward, docs/adr/0002-store-and-forward.md).
+#If enabled, a missing endpoint or cert is a config error and the app refuses
+#to start; a network outage is normal and the app runs anyway.
+ENABLE_AWS = True
+AWS_TOPIC = "detections/events"
+AWS_CLIENT_ID = "detector-01"
+CERTS_DIR = PROJECT_ROOT / "certs"
+
+#AWS_ENDPOINT lives in .env (kept out of git)
+load_dotenv(PROJECT_ROOT / ".env")
+
 #Set True for headless setup for greater performance
 HEADLESS = False
 
@@ -38,18 +50,10 @@ class RasPiDeploy:
         #self.memory_queue = []
         #self.last_logged_frame_timestamp = time.time()
 
-        #aws logging
-        # self.cloud = AWSPublisher(
-        #     #endpoint="XXXXXX-ats.iot.us-east-1.amazonaws.com",  # your IoT endpoint
-        #     #endpoint = AWS_ENDPOINT,
-        #     endpoint = "alqw25622p8x0-ats.iot.us-east-2.amazonaws.com",
-        #     ca_path="certs/AmazonRootCA1.pem",
-        #     cert_path="certs/detector-01.cert.pem",
-        #     key_path="certs/detector-01.private.key",
-        #     sensor_id="S1",
-        #     #client_id="laptop-dev",   # give the Pi a DIFFERENT id later
-        #     client_id = "detector-01"
-        # )
+        #AWS upload (None when disabled). Built first, so a config error fails
+        #before the camera and model are loaded.
+        self.publisher = self._make_publisher()
+        self.forwarder = AWSForwarder(DB_PATH, self.publisher) if self.publisher else None
 
         #Global data to pass
         self.conf_thresh = conf_thresh
@@ -97,7 +101,12 @@ class RasPiDeploy:
         )
 
         #Initialize Event Writer (opens the DB inside its own thread)
-        self.event_writer = EventWriter(self.queue, DB_PATH)
+        #inserted: wakes the forwarder after each insert so uploads are immediate
+        self.event_writer = EventWriter(
+            self.queue,
+            DB_PATH,
+            inserted = self.forwarder.wakeup if self.forwarder else None
+        )
 
         #Initialize GUI Handler
         self.gui = GUIHandler(
@@ -163,6 +172,26 @@ class RasPiDeploy:
     #             self.inference_frame_ready = True
     #             self.inference_frame = self.inference_plotted
 
+    def _make_publisher(self):
+        if not ENABLE_AWS:
+            print("[AWS] disabled (ENABLE_AWS = False); logging to SQLite only")
+            return None
+
+        endpoint = os.getenv("AWS_ENDPOINT")
+        if not endpoint:
+            raise RuntimeError("ENABLE_AWS is True but AWS_ENDPOINT is not set in .env")
+
+        #Missing cert files raise FileNotFoundError here (fail fast on config)
+        return AWSPublisher(
+            endpoint = endpoint,
+            ca_path = str(CERTS_DIR / "AmazonRootCA1.pem"),
+            cert_path = str(CERTS_DIR / f"{AWS_CLIENT_ID}.cert.pem"),
+            key_path = str(CERTS_DIR / f"{AWS_CLIENT_ID}.private.key"),
+            topic = AWS_TOPIC,
+            sensor_id = SENSOR_ID,
+            client_id = AWS_CLIENT_ID
+        )
+
     def run(self):
 
         self.t_camera = threading.Thread(target = self.camera.task_camera, daemon = True)
@@ -174,6 +203,10 @@ class RasPiDeploy:
         #would pile up in the queue and be lost
         if not self.event_writer.wait_until_ready():
             raise RuntimeError(f"Event writer failed to start: {self.event_writer.error}")
+
+        if self.forwarder:
+            self.t_forwarder = threading.Thread(target = self.forwarder.task_forwarder, daemon = True)
+            self.t_forwarder.start()
 
         self.t_camera.start()
         self.t_inference.start()
@@ -229,7 +262,13 @@ class RasPiDeploy:
         self.event_writer.stop()
         self.t_writer.join()
 
-        #self.cloud.close()
+        #3. every event is now in SQLite; let the forwarder make a final bounded
+        #   upload attempt (anything left is sent next run), then close MQTT
+        if self.forwarder:
+            self.forwarder.stop()
+            self.t_forwarder.join()
+            self.publisher.close()
+
         cv2.destroyAllWindows()
         print("Shutdown complete.")
 
