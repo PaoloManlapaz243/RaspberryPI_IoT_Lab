@@ -6,6 +6,7 @@ from ultralytics import YOLO
 from aws_publisher import AWSPublisher
 
 import queue
+from pathlib import Path
 #frdaom dotenv impoasdasrt AWS_ENDPOINT
 
 from threads.camera import CameraHandler
@@ -15,8 +16,13 @@ from gui_handler import GUIHandler
 
 
 
-#SQLite event log (relative to src/, like the model path)
-DB_PATH = "../logs/events.db"
+#Paths are anchored to this file, not the current directory, so the program
+#works no matter where it is launched from
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODEL_DIR = str(PROJECT_ROOT / "models" / "yolo11n_ncnn_model")
+
+#SQLite event log
+DB_PATH = str(PROJECT_ROOT / "logs" / "events.db")
 
 #Identifies this device; also the DynamoDB partition key
 SENSOR_ID = "S1"
@@ -25,7 +31,7 @@ SENSOR_ID = "S1"
 HEADLESS = False
 
 class RasPiDeploy:
-    def __init__(self, src=0, model_dir = "../models/yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
+    def __init__(self, src=0, model_dir = MODEL_DIR, height = 640, width = 480, conf_thresh = 0.3):
 
         #db logs
         #self.db = TinyDB("logs/camera_logs.json")
@@ -163,6 +169,12 @@ class RasPiDeploy:
         self.t_inference = threading.Thread(target = self.object_detect.task_inference, daemon = True)
         self.t_writer = threading.Thread(target = self.event_writer.task_writer, daemon = True)
         self.t_writer.start()
+
+        #Fail fast: if the DB can't be opened, don't run detection whose events
+        #would pile up in the queue and be lost
+        if not self.event_writer.wait_until_ready():
+            raise RuntimeError(f"Event writer failed to start: {self.event_writer.error}")
+
         self.t_camera.start()
         self.t_inference.start()
 

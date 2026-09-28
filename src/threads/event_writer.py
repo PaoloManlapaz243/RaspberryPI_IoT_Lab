@@ -1,4 +1,5 @@
 import queue
+import threading
 import sqlite3
 
 from sqlite_handler import SQLiteHandler
@@ -21,10 +22,20 @@ class EventWriter:
         self.queue = event_queue
         self.db_path = db_path
 
+        #Set once the DB is open (or failed to open); see wait_until_ready()
+        self.ready = threading.Event()
+        self.error = None
+
     def task_writer(self):
         #Open the DB here, not in __init__: sqlite3 connections belong to
         #the thread that created them, and __init__ runs on the main thread
-        db = SQLiteHandler(self.db_path)
+        try:
+            db = SQLiteHandler(self.db_path)
+        except Exception as e:
+            self.error = e
+            self.ready.set()
+            return
+        self.ready.set()
 
         try:
             while True:
@@ -40,6 +51,10 @@ class EventWriter:
                     print(f"[DB] dropped event {event}: {e}")
         finally:
             db.close()
+
+    def wait_until_ready(self, timeout=5.0):
+        #True if the DB opened successfully; call after starting the thread
+        return self.ready.wait(timeout) and self.error is None
 
     def stop(self):
         self.queue.put(STOP)

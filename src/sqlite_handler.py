@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 # Columns every event dict must provide (see docs/adr/0001-event-pipeline.md)
 EVENT_COLUMNS = (
@@ -50,6 +51,8 @@ class SQLiteHandler:
     """
 
     def __init__(self, filepath: str):
+        #sqlite3 creates the file but not its folder
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(filepath)
 
         #WAL lets readers (e.g. an agent process) query while we write

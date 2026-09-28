@@ -11,7 +11,8 @@ logs detection events locally and to AWS IoT Core (MQTT → IoT Rule → DynamoD
 - Don't commit unless I ask. Don't touch `certs/`, `.env`, or AWS config.
 
 ## Run
-All scripts use paths relative to `src/`, so run from there:
+`main.py` resolves its paths from its own location, so it runs from any
+directory. `ncnn_export.py` still uses paths relative to `src/`:
 
 ```bash
 source .venv/bin/activate
