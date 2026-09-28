@@ -131,7 +131,6 @@ class RasPiDeploy:
             cert_path = str(CERTS_DIR / f"{AWS_CLIENT_ID}.cert.pem"),
             key_path = str(CERTS_DIR / f"{AWS_CLIENT_ID}.private.key"),
             topic = AWS_TOPIC,
-            sensor_id = SENSOR_ID,
             client_id = AWS_CLIENT_ID
         )
 
