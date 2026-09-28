@@ -28,7 +28,7 @@ python main.py          # press 'q' in the preview window to quit
   unless `HEADLESS = True`.
 
 ## Architecture
-Four threads (camera, inference, event writer, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/main.py`:
+Five threads (camera, inference, event writer, AWS forwarder, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/main.py`:
 
 | Component | File | Role |
 |---|---|---|
@@ -37,8 +37,9 @@ Four threads (camera, inference, event writer, main/GUI) coordinated with `threa
 | `InferenceHandler` | `src/threads/object_detection.py` | Consumer: `model.track(persist=True)` on the latest frame, stores plotted frame, pushes `enter`/`exit` events per track into `queue.Queue` |
 | `GUIHandler` | `src/gui_handler.py` | Draws FPS and shows the plotted frame |
 | `EventWriter` | `src/threads/event_writer.py` | Consumer: drains the queue into SQLite, one insert per event; stops on a `None` sentinel |
-| `SQLiteHandler` | `src/sqlite_handler.py` | Storage only: `events` table + `tracks` view, WAL mode. Must be created inside the thread that uses it |
-| `AWSPublisher` | `src/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1 |
+| `SQLiteHandler` | `src/sqlite_handler.py` | Storage only: `events` table, `tracks` view, `consumer_offsets` cursors, WAL mode. Must be created inside the thread that uses it |
+| `AWSForwarder` | `src/threads/aws_forwarder.py` | Store-and-forward: reads events after its cursor from SQLite, publishes in batches, advances the cursor only when the whole batch is acked |
+| `AWSPublisher` | `src/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
 Key design points:
 - "Latest frame wins": threads share the most recent frame via an attribute,
@@ -47,23 +48,27 @@ Key design points:
   never blocks inference.
 - Events are per track, not per frame: `enter` on first sighting, `exit` after
   `EXIT_TIMEOUT_S` unseen. Events are plain Python dicts (ADR 0001 format).
-- `sensor_id` is added to every MQTT payload because it is the DynamoDB
-  partition key.
+- SQLite is the source of truth; the cloud is a copy (ADR 0002). Delivery is
+  at-least-once, so payloads carry an idempotent `event_key` (DynamoDB sort
+  key; `sensor_id` is the partition key).
 
 ## Architecture decisions
 Recorded as ADRs in `docs/adr/` (numbered, one decision per file). Read them
 before changing the pipeline, and add a new ADR for any new architectural
 decision rather than editing an accepted one.
 - `0001-event-pipeline.md`: queue + dedicated logging thread, events written
-  as they arrive, enter/exit track events, SQLite in WAL mode; event bus planned.
+  as they arrive, enter/exit track events, SQLite in WAL mode.
+- `0002-store-and-forward.md`: AWS upload via a per-consumer cursor over the
+  SQLite log (replaces 0001's in-memory fan-out plan for option C).
 
 ## Current state (in progress)
 - Events go to `logs/events.db` (gitignored). Inspect with
   `sqlite3 logs/events.db "SELECT * FROM tracks"`.
 - Shutdown order in `main.py` matters: producers join first, then the writer
-  sentinel (see ADR 0001).
-- AWS publishing is commented out in `main.py`. The endpoint belongs in `.env`
-  (`python-dotenv` is installed but not yet used).
+  sentinel, then the forwarder's final upload, then `publisher.close()`.
+- AWS config: `ENABLE_AWS` / `AWS_CLIENT_ID` in `main.py`, `AWS_ENDPOINT` in
+  `.env`, certs in `certs/`. Cloud-side setup: `docs/aws-setup.md`.
+- Check upload progress: `sqlite3 logs/events.db "SELECT * FROM consumer_offsets"`.
 - `logs/camera_logs.json` is sample data from Experiment 1 (old event schema:
   `{timestamp, detections: [{label, confidence}]}`).
 
