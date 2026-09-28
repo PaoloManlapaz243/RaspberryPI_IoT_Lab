@@ -7,7 +7,11 @@ EVENT_COLUMNS = (
     "class_name", "confidence", "x1", "y1", "x2", "y2",
 )
 
+#Wrapped in one transaction: the writer and forwarder threads both open the DB
+#at startup, and interleaved DROP/CREATE VIEW statements would otherwise fail
 SCHEMA = """
+BEGIN IMMEDIATE;
+
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY,
     ts          TEXT    NOT NULL,
@@ -40,6 +44,15 @@ SELECT e.sensor_id, e.run_id, e.track_id, e.class_name,
         ORDER BY x.id LIMIT 1) AS exited_at
 FROM events e
 WHERE e.event_type = 'enter';
+
+-- Store-and-forward cursors: each consumer (e.g. the AWS forwarder) records
+-- the highest events.id it has fully delivered, and resumes after it
+CREATE TABLE IF NOT EXISTS consumer_offsets (
+    consumer      TEXT    PRIMARY KEY,
+    last_event_id INTEGER NOT NULL
+);
+
+COMMIT;
 """
 
 
@@ -47,7 +60,8 @@ class SQLiteHandler:
     """
     Storage only: no threading or queue logic lives here.
     sqlite3 connections belong to the thread that created them, so construct
-    this INSIDE the thread that will write (the event writer's task).
+    this INSIDE the thread that uses it. Each thread (writer, forwarder) gets
+    its own instance; WAL mode lets them work concurrently.
     """
 
     def __init__(self, filepath: str):
@@ -60,8 +74,10 @@ class SQLiteHandler:
         #Safe with WAL; skips an fsync per commit (matters on an SD card)
         self.conn.execute("PRAGMA synchronous=NORMAL")
 
+        #Rows come back as sqlite3.Row, so fetch_events_after() can build dicts
+        self.conn.row_factory = sqlite3.Row
+
         self.conn.executescript(SCHEMA)
-        self.conn.commit()
 
     def insert_event(self, event: dict):
         #Commit per event so readers see it immediately (no batching)
@@ -70,6 +86,31 @@ class SQLiteHandler:
         self.conn.execute(
             f"INSERT INTO events ({', '.join(EVENT_COLUMNS)}) VALUES ({placeholders})",
             values,
+        )
+        self.conn.commit()
+
+    def fetch_events_after(self, last_event_id: int, limit: int) -> list[dict]:
+        #Oldest first, so a consumer delivers events in the order they happened
+        rows = self.conn.execute(
+            f"SELECT id, {', '.join(EVENT_COLUMNS)} FROM events "
+            "WHERE id > ? ORDER BY id LIMIT ?",
+            (last_event_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_offset(self, consumer: str) -> int:
+        #0 = nothing delivered yet (SQLite ids start at 1)
+        row = self.conn.execute(
+            "SELECT last_event_id FROM consumer_offsets WHERE consumer = ?",
+            (consumer,),
+        ).fetchone()
+        return row["last_event_id"] if row else 0
+
+    def set_offset(self, consumer: str, last_event_id: int):
+        self.conn.execute(
+            "INSERT INTO consumer_offsets (consumer, last_event_id) VALUES (?, ?) "
+            "ON CONFLICT(consumer) DO UPDATE SET last_event_id = excluded.last_event_id",
+            (consumer, last_event_id),
         )
         self.conn.commit()
 

@@ -18,9 +18,13 @@ class EventWriter:
     is written before the thread exits.
     """
 
-    def __init__(self, event_queue: queue.Queue, db_path: str):
+    def __init__(self, event_queue: queue.Queue, db_path: str, inserted: threading.Event = None):
         self.queue = event_queue
         self.db_path = db_path
+
+        #Optional: set after every insert to wake downstream consumers (e.g. the
+        #AWS forwarder). The writer doesn't know or care who is listening.
+        self.inserted = inserted
 
         #Set once the DB is open (or failed to open); see wait_until_ready()
         self.ready = threading.Event()
@@ -49,6 +53,10 @@ class EventWriter:
                     db.insert_event(event)
                 except (KeyError, sqlite3.Error) as e:
                     print(f"[DB] dropped event {event}: {e}")
+                    continue
+
+                if self.inserted is not None:
+                    self.inserted.set()
         finally:
             db.close()
 
