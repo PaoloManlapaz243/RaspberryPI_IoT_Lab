@@ -24,9 +24,6 @@ HEADLESS = False
 class RasPiDeploy:
     def __init__(self, src=0, model_dir = "../models/yolo11n_ncnn_model", height = 640, width = 480, conf_thresh = 0.3):
 
-        # Load the exported NCNN model directory
-        #self.model = YOLO(model_dir, task = 'detect')
-
         #db logs
         #self.db = TinyDB("logs/camera_logs.json")
         #self.memory_queue = []
