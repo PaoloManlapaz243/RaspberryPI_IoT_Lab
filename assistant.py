@@ -1,19 +1,18 @@
 """
 Natural-language assistant over your camera detection data.
 
-Design (the important part):
-  - The 5 functions below are the ONLY code that touches the data. They are
-    deterministic and testable. This is your "capabilities" set.
-  - The SLM (a premade model, via Ollama) does TWO things and nothing else:
-      1) route: map the user's phrasing -> one function + args
-      2) phrase: turn the function's result into a plain-English sentence
-  - The model never counts or invents numbers. Your code computes; the model
-    only translates. That's why ~5 functions cover infinite phrasings.
+Design:
+  - The functions below are the ONLY code that touches the data. Deterministic,
+    testable. This is your "capabilities" set. Breadth comes from operations over
+    your fields (label, confidence, timestamp), parameterized so ONE function
+    covers a whole family of questions -- not a function per phrasing.
+  - The SLM (premade model via Ollama) does TWO things: route (phrasing -> one
+    function + args) and phrase (result -> plain English). It never computes.
 
 Run:
-  1) ollama serve            (usually already running as a service)
-  2) ollama pull qwen2.5:1.5b
-  3) python3 assistant.py
+  1) Ollama running (Windows: the tray app serves it on :11434 automatically)
+  2) ollama pull gemma2:2b
+  3) python assistant.py
 """
 
 import json
@@ -26,9 +25,9 @@ from tinydb import TinyDB
 
 # ---------------- config ----------------
 OLLAMA_URL   = "http://localhost:11434/api/chat"
-MODEL        = "gemma2:2b"      # bump to "gemma2:2b" or "qwen2.5:3b" if routing is flaky
+MODEL        = "gemma2:2b"         # 2B routes more reliably than 1.5b; qwen2.5:3b is even better
 TINYDB_PATH  = "camera_logs.json"  # same file camera.py writes to
-USE_LLM_PHRASING = True            # False = skip 2nd model call, faster but less natural
+USE_LLM_PHRASING = True            # False = skip 2nd model call (faster, less natural)
 
 # chat logging to DynamoDB via MQTT (reuses your IoT cert -- no new credentials).
 # A second IoT rule routes topic 'chat/logs' -> chat_logs table.
@@ -70,7 +69,7 @@ def _iter_detections(events, since_minutes):
             for d in e.get("detections", []):
                 yield e["timestamp"], d
 
-# ---- the 5 capabilities ----
+# ---- capabilities ----
 
 def recent(n=5):
     events = sorted(_load_events(), key=lambda e: e.get("timestamp", ""), reverse=True)
@@ -90,7 +89,7 @@ def most_common(since_minutes=None):
     return {"since_minutes": since_minutes, "top": counter.most_common(3)}
 
 def last_seen(label):
-    if not label:                       # model passed null/empty -> treat as "last detection of anything"
+    if not label:                       # model passed null/empty -> "last detection of anything"
         return recent(1)
     latest = None
     for ts, d in _iter_detections(_load_events(), None):
@@ -103,12 +102,38 @@ def labels_available():
     labels = {d.get("label", "?") for _, d in _iter_detections(_load_events(), None)}
     return {"labels": sorted(labels)}
 
+def stats(op="avg", label=None, since_minutes=None):
+    """Numeric stats over detection confidence. op: avg | min | max.
+    One function covers 'average confidence', 'most confident detection',
+    'lowest confidence person in the last hour', etc."""
+    vals = []
+    for _, d in _iter_detections(_load_events(), since_minutes):
+        if label and d.get("label", "").lower() != str(label).lower():
+            continue
+        v = d.get("confidence")
+        if v is not None:
+            vals.append(float(v))
+    if not vals:
+        return {"op": op, "label": label, "since_minutes": since_minutes, "value": None, "n": 0}
+    value = {"avg": round(sum(vals) / len(vals), 3),
+             "min": min(vals),
+             "max": max(vals)}.get(op, round(sum(vals) / len(vals), 3))
+    return {"op": op, "label": label, "since_minutes": since_minutes, "value": value, "n": len(vals)}
+
+def busiest(since_minutes=None):
+    """Which hour of the day has the most detections."""
+    buckets = Counter(ts[11:13] for ts, _ in _iter_detections(_load_events(), since_minutes))
+    top = buckets.most_common(3)
+    return {"since_minutes": since_minutes, "busiest_hour": top[0][0] if top else None, "counts": top}
+
 FUNCTIONS = {
     "recent": recent,
     "count": count,
     "most_common": most_common,
     "last_seen": last_seen,
     "labels_available": labels_available,
+    "stats": stats,
+    "busiest": busiest,
 }
 
 
@@ -117,15 +142,19 @@ FUNCTIONS = {
 ROUTER_SYSTEM = """You convert a question about camera detection data into ONE function call.
 
 Functions:
-- recent(n): the n most recent detection events, regardless of label. Use this for
+- recent(n): the n most recent detection events, regardless of label. Use for
   "last detection", "latest", "what did you just see", "most recent". For "the last
   detection" use n=1.
 - count(label, since_minutes): how many times a label was detected. label=null means everything.
-- most_common(since_minutes): which labels are detected most often
-- last_seen(label): when a SPECIFIC named label was last detected. Only use this when the
-  question names a specific object (e.g. "when did you last see a person"). Never call it
-  with label=null -- if no specific label is named, use recent(1) instead.
-- labels_available(): which labels have ever been detected
+- most_common(since_minutes): which labels are detected most often.
+- last_seen(label): when a SPECIFIC named label was last detected. Only when the question
+  names a specific object (e.g. "when did you last see a person"). Never call with label=null --
+  if no specific label is named, use recent(1) instead.
+- labels_available(): which labels have ever been detected ("what can you detect").
+- stats(op, label, since_minutes): confidence statistics. op is "avg", "min", or "max".
+  Use for "average/highest/lowest confidence", optionally for a specific label.
+- busiest(since_minutes): which hour of the day has the most detections. Use for
+  "busiest time", "when do you see the most", "peak hour".
 
 Rules:
 - Reply with ONLY JSON: {"function": "<name>", "args": {...}}
@@ -152,7 +181,7 @@ def route(question):
          {"role": "user", "content": question}],
         force_json=True,
     )
-    print("[route]", content)   # debug: shows the model's raw decision
+    print("[route]", content)   # debug: remove once you're happy with routing
     try:
         return json.loads(content)
     except Exception:
@@ -166,7 +195,6 @@ def execute(call):
     try:
         return FUNCTIONS[name](**args)
     except TypeError:
-        # model passed wrong/extra args -- be lenient rather than crash
         return {"error": "bad_args", "call": call}
 
 PHRASE_SYSTEM = """Answer the user's question in ONE short, plain-English sentence,
@@ -186,14 +214,15 @@ def answer(question):
     call = route(question)
     if call.get("function") == "unknown":
         return ("I can only answer questions about detections: counts, recent events, "
-                "the most common label, when something was last seen, or which labels I track.")
+                "the most common label, confidence stats, busiest times, when a specific "
+                "thing was last seen, or which labels I track.")
     result = execute(call)
     if result is None:
         return "I couldn't map that to something I can look up."
     return phrase(question, result)
 
 
-# ============ optional: log each Q&A to DynamoDB ============
+# ============ optional: log each Q&A to DynamoDB via MQTT ============
 
 _session_id = str(uuid.uuid4())[:8]
 _chat_pub = None
@@ -221,8 +250,7 @@ def log_chat(question, reply):
         "answer": reply,
     }
     try:
-        # add_sensor_id=False -> keep chat_logs rows clean (no sensor_id column)
-        _chat_pub.publish(event, add_sensor_id=False)
+        _chat_pub.publish(event, add_sensor_id=False)   # keep chat_logs rows clean
     except Exception as e:
         print(f"(chat log failed: {e})")
 
