@@ -20,14 +20,24 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_track ON events(sensor_id, run_id, track_id);
 
--- One row per track: when it appeared, when it left (NULL = still present)
-CREATE VIEW IF NOT EXISTS tracks AS
+-- Views hold no data, so always recreate them to match this code
+DROP VIEW IF EXISTS tracks;
+
+-- One row per visit: when it appeared, when it left (NULL = still present).
+-- The tracker can revive an ID after we emitted its exit, so one track_id may
+-- have several enter/exit pairs; pair each enter with the NEXT exit (by id,
+-- which is insertion order) rather than joining every enter to every exit.
+CREATE VIEW tracks AS
 SELECT e.sensor_id, e.run_id, e.track_id, e.class_name,
-       e.ts AS entered_at, x.ts AS exited_at
+       e.ts AS entered_at,
+       (SELECT x.ts FROM events x
+        WHERE x.sensor_id = e.sensor_id AND x.run_id = e.run_id
+          AND x.track_id = e.track_id AND x.event_type = 'exit'
+          AND x.id > e.id
+        ORDER BY x.id LIMIT 1) AS exited_at
 FROM events e
-LEFT JOIN events x
-  ON x.run_id = e.run_id AND x.track_id = e.track_id AND x.event_type = 'exit'
 WHERE e.event_type = 'enter';
 """
 
