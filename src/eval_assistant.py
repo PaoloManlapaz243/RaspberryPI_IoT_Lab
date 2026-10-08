@@ -180,16 +180,22 @@ def check(call, function, args):
     return None
 
 
-def _count_model_calls():
-    #Wrap the model call to count calls per question without changing the
-    #assistant: more than one call means validation forced a retry
-    calls = [0]
-    real = da._ollama
-    def counting(*a, **k):
-        calls[0] += 1
-        return real(*a, **k)
-    da._ollama = counting
-    return calls
+def _instrument():
+    #Wrap assistant internals to count, per question, model calls and validation
+    #rejections (each rejection triggers a retry), without changing the assistant
+    counts = {"calls": 0, "rejections": 0}
+    real_ollama, real_validate = da._ollama, da.validate_call
+    def ollama(*a, **k):
+        counts["calls"] += 1
+        return real_ollama(*a, **k)
+    def validate(*a, **k):
+        try:
+            return real_validate(*a, **k)
+        except ValueError:
+            counts["rejections"] += 1
+            raise
+    da._ollama, da.validate_call = ollama, validate
+    return counts
 
 
 def main():
@@ -202,15 +208,16 @@ def main():
     cases, name = (HELD_OUT, "held-out") if held_out else (CASES, "tuning")
     print(f"model={da.MODEL}  set={name}  cases={len(cases)}\n")
 
-    calls = _count_model_calls()
-    passed, retried, to_chat = 0, 0, []
+    counts = _instrument()
+    passed, retried, total_calls, to_chat = 0, 0, 0, []
     confusions, latencies = Counter(), []
     for question, function, args in cases:
-        calls[0] = 0
+        counts.update(calls=0, rejections=0)
         start = time.time()
         call = da.route(question, verbose=False)
         latencies.append(time.time() - start)
-        retried += calls[0] > 1
+        retried += counts["rejections"] > 0
+        total_calls += counts["calls"]
 
         reason = check(call, function, args)
         passed += reason is None
@@ -234,7 +241,8 @@ def main():
         print("  none")
 
     print(f"\nmisroutes to chat: {len(to_chat)}" + "".join(f"\n  - {q}" for q in to_chat))
-    print(f"retry rate: {retried}/{len(cases)}")
+    print(f"retry rate: {retried}/{len(cases)} (questions where validation rejected a reply)")
+    print(f"model calls: {total_calls / len(cases):.2f} per question")
     print(f"latency: avg {sum(latencies) / len(latencies):.2f}s, worst {max(latencies):.2f}s")
 
     if held_out:
