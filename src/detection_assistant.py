@@ -209,13 +209,14 @@ def _ollama(messages, force_json=False, temperature=0.0):
     r.raise_for_status()
     return r.json()["message"]["content"]
 
-def route(question):
+def route(question, verbose=True):
     content = _ollama(
         [{"role": "system", "content": ROUTER_SYSTEM},
          {"role": "user", "content": question}],
         force_json=True,
     )
-    print("[route]", content)   # debug: shows the model's raw decision
+    if verbose:
+        print("[route]", content)   # debug: shows the model's raw decision
     try:
         return json.loads(content)
     except Exception:
