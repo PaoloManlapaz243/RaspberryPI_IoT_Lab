@@ -76,6 +76,9 @@ decision rather than editing an accepted one.
 - `0005-routing-evaluation.md`: 50/30 eval with safety metrics, `unclear`
   intent, labels validated against the detector's vocabulary, code guard for
   unsupported questions; two-stage routing measured and rejected.
+- `0006-label-vocabulary-in-schema.md`: the router's `label` is an enum of the
+  detector's labels (+ `not_a_detector_label`, null); the model maps words, with no
+  hand-written synonym table. Open regressions are listed there.
 
 ## Current state (in progress)
 - Events go to `logs/events.db` (gitignored). Inspect with
@@ -94,7 +97,7 @@ decision rather than editing an accepted one.
 - Put new thread workers in `src/threads/`.
 - Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
   `REQUIRED_ARGS`, the router prompt, eval cases, and check
-  `UNSUPPORTED_PATTERNS` / `LABEL_SYNONYMS` (ADRs 0004, 0005).
+  `UNSUPPORTED_PATTERNS` (ADRs 0004-0006).
 - The assistant reads the detector's labels from
   `models/yolo11n_ncnn_model/metadata.yaml`, so run `ncnn_export.py` first.
 - Secrets live in `certs/` and `.env`. Never read, print, or commit them.
