@@ -99,6 +99,8 @@ decision rather than editing an accepted one.
 - Match the existing style: classes per component, `task_*` methods as thread
   targets, shared `threading.Event`s passed in through constructors.
 - Put new thread workers in `src/threads/`.
+- `docs/assistant-flow.md` is a Mermaid flowchart of `route()` / `answer()`.
+  Update it in the same commit as any change to that flow.
 - Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
   `REQUIRED_ARGS`, the router prompt, eval cases, and check
   `UNSUPPORTED_PATTERNS` (ADRs 0004-0006).

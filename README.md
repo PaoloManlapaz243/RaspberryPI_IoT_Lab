@@ -49,3 +49,5 @@ python src/detection_assistant.py
 
 Try: "is anyone there?", "how many people came by in the last hour?",
 "when did you last see a dog?"
+
+How a question becomes a reply: [`docs/assistant-flow.md`](docs/assistant-flow.md).
