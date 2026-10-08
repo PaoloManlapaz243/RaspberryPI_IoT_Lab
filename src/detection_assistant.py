@@ -278,28 +278,41 @@ NON_FUNCTION_INTENTS = ["unclear", "unknown"]
 #Fail at startup if a function is added to FUNCTIONS without its args here
 assert set(ALLOWED_ARGS) == set(FUNCTIONS) | set(NON_FUNCTION_INTENTS), "ALLOWED_ARGS out of sync with FUNCTIONS"
 
-#Ollama enforces this WHILE the model generates (constrained decoding): tokens
-#that would break it are never produced, so e.g. "present_now()" is impossible.
-#It guarantees shape and types only; validate_call() checks meaning.
-ROUTER_SCHEMA = {
-    "type": "object",
-    "required": ["function", "args"],
-    "properties": {
-        "function": {"type": "string", "enum": list(FUNCTIONS) + NON_FUNCTION_INTENTS},
-        "args": {
-            "type": "object",
-            "properties": {
-                #The detector's own vocabulary, from metadata.yaml: the model can
-                #only name a real label, the sentinel, or null (= every label)
-                "label":         {"enum": sorted(DETECTOR_LABELS) + [NOT_A_DETECTOR_LABEL, None]},
-                "since_minutes": {"type": ["integer", "null"]},
-                "n":             {"type": "integer"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    "additionalProperties": False,
+#Schema for each argument. The label enum is the detector's own vocabulary
+#(metadata.yaml): a real label, the sentinel, or null (= every label).
+ARG_SCHEMAS = {
+    "label":         {"enum": sorted(DETECTOR_LABELS) + [NOT_A_DETECTOR_LABEL, None]},
+    "since_minutes": {"type": ["integer", "null"]},
+    "n":             {"type": "integer"},
 }
+
+def _non_null(schema):
+    if "enum" in schema:
+        return {"enum": [v for v in schema["enum"] if v is not None]}
+    return {"type": [t for t in schema["type"] if t != "null"]}
+
+def _function_schema(name):
+    #Exactly this function's args, all present: the model must decide each one
+    #(null included) instead of leaving it out. Required args can't be null.
+    args = sorted(ALLOWED_ARGS[name])
+    required = REQUIRED_ARGS.get(name, set())
+    return {
+        "type": "object",
+        "required": ["function", "args"],
+        "properties": {
+            "function": {"const": name},
+            "args": {"type": "object", "required": args, "additionalProperties": False,
+                     "properties": {a: _non_null(ARG_SCHEMAS[a]) if a in required else ARG_SCHEMAS[a]
+                                    for a in args}},
+        },
+        "additionalProperties": False,
+    }
+
+#Ollama enforces this WHILE the model generates (constrained decoding): tokens
+#that would break it are never produced. One branch per function, generated
+#from ALLOWED_ARGS, so a function can't be called with missing or extra args.
+#It guarantees shape and types only; validate_call() checks meaning.
+ROUTER_SCHEMA = {"anyOf": [_function_schema(name) for name in ALLOWED_ARGS]}
 
 class InvalidCall(ValueError):
     pass
