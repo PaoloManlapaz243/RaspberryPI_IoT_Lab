@@ -93,3 +93,26 @@ Both `.env` and `certs/` are gitignored. Cert filenames are derived from
 5. To test outage recovery: disconnect Wi-Fi, generate events, quit, reconnect,
    and run again. The forwarder should log `resuming after event id N` and
    upload the backlog.
+
+## Chat logs (detection assistant, optional)
+
+Used only when `LOG_CHAT_TO_AWS = True` in `src/detection_assistant.py`
+([ADR 0003](adr/0003-detection-assistant.md)).
+
+| Piece | Value |
+|---|---|
+| Topic | `chat/logs` |
+| IoT Rule | `SELECT * FROM 'chat/logs'` → DynamoDBv2 → the chat table |
+| Table keys | agree with whoever owns the table; each payload has `session_id` (8-char id per assistant run) and `timestamp` (local time, microseconds), so `session_id` + `timestamp` is the natural key pair |
+| Policy | `iot:Connect` for client ID `assistant-dev`, and `iot:Publish` to `chat/logs` |
+
+Payload (no `sensor_id`; the publisher sends payloads exactly as built):
+
+```json
+{"session_id": "3f9a1c2b", "timestamp": "2026-09-28T12:35:48.123456",
+ "question": "is anyone there?", "answer": "Yes, one person has been in view since 12:35 PM."}
+```
+
+The chat `timestamp` is local time without a zone, unlike detection events
+(UTC). It's kept as-is so it matches any table Ben already created. Switch it to
+UTC if you're creating the table fresh.

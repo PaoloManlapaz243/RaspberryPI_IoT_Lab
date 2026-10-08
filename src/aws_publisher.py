@@ -71,10 +71,9 @@ class AWSPublisher:
     """
 
     def __init__(self, endpoint, ca_path, cert_path, key_path,
-                 topic="detections/events", sensor_id="S1",
+                 topic="detections/events",
                  client_id="laptop-dev"):
         self.topic = topic
-        self.sensor_id = sensor_id
         self.connected = False
 
         #Message IDs published but not yet acknowledged by the broker.
@@ -137,10 +136,11 @@ class AWSPublisher:
             else:
                 self._acked_early.add(mid)
 
-    def publish(self, event) -> bool:
+    def publish(self, payload: dict) -> bool:
+        #Sends the dict exactly as given: this class is transport only. Whoever
+        #builds the payload owns its fields (e.g. events already carry sensor_id).
         #Returns True if paho accepted the message (it will be delivered, even
-        #across a reconnect); False if it was rejected outright
-        payload = {"sensor_id": self.sensor_id, **event}
+        #across a reconnect); False if it was rejected outright.
 
         #Never hold _pending_lock while calling into paho: paho calls
         #on_publish while holding its own internal lock, so holding ours here
@@ -181,8 +181,10 @@ class AWSPublisher:
         #guarantee queued messages were sent. Wait for acks first, then
         #disconnect, then stop the thread.
         if not self.wait_for_acks(timeout):
+            #Transport only: whether these are recoverable is the caller's
+            #business (the forwarder re-sends from SQLite; chat logs are lost)
             print(f"[AWS] WARNING: closing with {self._pending_count()} unacknowledged "
-                  "event(s); they are still in SQLite and will be re-sent next run")
+                  f"message(s) on '{self.topic}'")
 
         self.client.disconnect()
         self.client.loop_stop()
