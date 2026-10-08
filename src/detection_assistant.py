@@ -103,25 +103,18 @@ def _load_detector_labels():
 
 DETECTOR_LABELS = _load_detector_labels()
 
-#Everyday words -> the detector's label. Only unambiguous one-to-one mappings:
-#categories ("vehicle", "animal") cover several labels and must stay invalid.
-LABEL_SYNONYMS = {
-    **dict.fromkeys(["people", "persons", "human", "humans", "folks", "someone", "somebody",
-                     "anyone", "anybody", "man", "men", "woman", "women", "guy", "guys",
-                     "kid", "kids", "child", "children", "ppl"], "person"),
-    **dict.fromkeys(["bike", "bikes"], "bicycle"),
-    **dict.fromkeys(["phone", "phones", "cellphone", "cellphones", "mobile"], "cell phone"),
-    **dict.fromkeys(["motorbike", "motorbikes"], "motorcycle"),
-    **dict.fromkeys(["puppy", "pup", "doggo"], "dog"),
-    **dict.fromkeys(["kitty", "kitten"], "cat"),
-    "automobile": "car",
-}
+#The model's way of saying "no detector label fits" (a category like
+#"vehicles", or something the detector can't see). Without it, the label enum
+#would force a pick, and "vehicles" could silently become "car".
+NOT_A_DETECTOR_LABEL = "not_a_detector_label"
 
 def canonical_label(label):
-    """Map the model's word onto a detector label ("Humans" -> "person"), or
-    None if the detector has no such label."""
+    """Exact detector label for a word, or None. Model-agnostic on purpose: only
+    case and simple plurals ("Dogs" -> "dog"). Mapping everyday words to labels
+    ("pedestrians" -> "person") is the model's job, constrained by the label
+    enum in ROUTER_SCHEMA; no hand-written synonym table to keep in sync."""
     label = str(label).strip().lower()
-    for candidate in (label, LABEL_SYNONYMS.get(label),
+    for candidate in (label,
                       label[:-1] if label.endswith("s") else None,
                       label[:-2] if label.endswith("es") else None):
         if candidate in DETECTOR_LABELS:
@@ -236,7 +229,10 @@ Functions (name: args):
   objects, or the room (weather, math, jokes, greetings, general knowledge).
 
 Rules:
-- Labels are one singular, lowercase object name: "person", "car", "dog", "cell phone".
+- label must be ONE of the detector's labels: {LABELS}.
+  Map everyday words to the closest label (e.g. "tabbies" -> cat). If the question is
+  about a category of objects or something not in the list, use "not_a_detector_label".
+  Never pick a different object just because it is in the list.
 - since_minutes is a time window: "last hour"->60, "today"->1440, "past 30 minutes"->30.
   If the question gives NO time window, since_minutes is null (all time). Never invent
   one, and never use 0.
@@ -244,6 +240,8 @@ Rules:
 - Prefer unclear over a function that would answer a different question.
 
 Examples:
+Q: how many tabbies came by today?
+A: {"function": "count", "args": {"label": "cat", "since_minutes": 1440}}
 Q: how many trucks have shown up in the past 30 minutes?
 A: {"function": "count", "args": {"label": "truck", "since_minutes": 30}}
 Q: has anything at all come by in the last 2 hours?
@@ -256,7 +254,7 @@ Q: how many buses came by after lunch?
 A: {"function": "unclear", "args": {}}
 Q: what's the capital of France?
 A: {"function": "unknown", "args": {}}
-"""
+""".replace("{LABELS}", ", ".join(sorted(DETECTOR_LABELS)))
 
 #Which args each function accepts. The single source for validation; the
 #schema's function names come from FUNCTIONS, so neither can drift from the code.
@@ -291,7 +289,9 @@ ROUTER_SCHEMA = {
         "args": {
             "type": "object",
             "properties": {
-                "label":         {"type": ["string", "null"]},
+                #The detector's own vocabulary, from metadata.yaml: the model can
+                #only name a real label, the sentinel, or null (= every label)
+                "label":         {"enum": sorted(DETECTOR_LABELS) + [NOT_A_DETECTOR_LABEL, None]},
                 "since_minutes": {"type": ["integer", "null"]},
                 "n":             {"type": "integer"},
             },
@@ -339,6 +339,9 @@ def validate_call(call):
         n = args["n"]
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 50:
             raise InvalidCall("n must be a whole number from 1 to 50")
+    if args.get("label") == NOT_A_DETECTOR_LABEL:
+        #A decline, not a format error: no retry, go straight to unclear
+        return {"function": "unclear", "args": {}, "reason": ["no detector label fits"]}
     if "label" in args:
         if not (isinstance(args["label"], str) and args["label"].strip()):
             raise InvalidCall("label must be a non-empty string, or null")
