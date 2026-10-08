@@ -78,7 +78,11 @@ decision rather than editing an accepted one.
   unsupported questions; two-stage routing measured and rejected.
 - `0006-label-vocabulary-in-schema.md`: the router's `label` is an enum of the
   detector's labels (+ `not_a_detector_label`, null); the model maps words, with no
-  hand-written synonym table. Open regressions are listed there.
+  hand-written synonym table.
+- `0007-per-function-schema-and-label-check.md`: `ROUTER_SCHEMA` is generated
+  per function (`anyOf`, exact args, all present); `route()` = guard question →
+  `_ask_model()` → guard answer (literal second label → unclear). The
+  chat-feature gate decision is open there.
 
 ## Current state (in progress)
 - Events go to `logs/events.db` (gitignored). Inspect with

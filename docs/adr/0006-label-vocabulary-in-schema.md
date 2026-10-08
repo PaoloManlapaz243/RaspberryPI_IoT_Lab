@@ -50,7 +50,9 @@ never listed, and 2 categories that must decline.
 The table wins on words it lists; the schema wins on words it doesn't. The
 held-out additions target that difference by design.
 
-## Known regressions (open)
+## Known regressions
+
+*Resolved by [ADR 0007](0007-per-function-schema-and-label-check.md).*
 
 1. **`recent` loses `n`:** "what was the last thing you saw?" →
    `recent()` → 5 visits instead of 1 (4 eval cases). Not label-related: the
