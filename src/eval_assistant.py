@@ -147,6 +147,19 @@ HELD_OUT = [
     ("what time is it?",                                "unknown",          {}),
     ("recommend a movie",                               "unknown",          {}),
     ("good morning",                                    "unknown",          {}),
+    #Added 2026-10-08 before any run, to compare label approaches (ADR 0006).
+    #Synonyms the old hand-written table never listed:
+    ("how many pedestrians walked past in the last hour?", "count",         {"label": "person", "since_minutes": 60}),
+    ("when did you last see a lad?",                    "last_seen",        {"label": "person"}),
+    ("how many automobiles today?",                     "count",            {"label": "car", "since_minutes": 1440}),
+    ("how many pups showed up?",                        "count",            {"label": "dog", "since_minutes": None}),
+    ("when was a pushbike last seen?",                  "last_seen",        {"label": "bicycle"}),
+    ("how many smartphones have been spotted?",         "count",            {"label": "cell phone", "since_minutes": None}),
+    ("when did a feline last appear?",                  "last_seen",        {"label": "cat"}),
+    ("how many lorries passed in the last 2 hours?",    "count",            {"label": "truck", "since_minutes": 120}),
+    #Categories (several detector labels): must decline, not pick one label
+    ("how many electronics were seen?",                 "unclear",          {}),
+    ("how much furniture has been detected?",           "unclear",          {}),
 ]
 
 
@@ -179,6 +192,16 @@ def check(call, function, args):
         elif got not in wants:
             return f"{key} {got!r}"
     return None
+
+
+def _is_synonym_case(question, args):
+    #The expected label isn't written in the question: the word had to be mapped
+    #("pedestrians" -> person). Measures label grouping on its own.
+    label = args.get("label")
+    if not isinstance(label, str):
+        return False
+    q = question.lower()
+    return label not in q and f"{label}s" not in q
 
 
 def _instrument():
@@ -214,6 +237,7 @@ def main():
 
     counts = _instrument()
     passed, retried, total_calls, to_chat = 0, 0, 0, []
+    synonyms, declines = [0, 0], [0, 0]   #[passed, total]
     confusions, latencies = Counter(), []
     for question, function, args in cases:
         counts.update(calls=0, rejections=0)
@@ -225,6 +249,10 @@ def main():
 
         reason = check(call, function, args)
         passed += reason is None
+        if _is_synonym_case(question, args):
+            synonyms[0] += reason is None; synonyms[1] += 1
+        if function == "unclear":
+            declines[0] += reason is None; declines[1] += 1
         routed = call.get("function")
         if routed != function and not (function == "unclear" and routed in SAFE_DECLINES):
             confusions[(function, routed)] += 1
@@ -237,6 +265,8 @@ def main():
 
     accuracy = passed / len(cases)
     print(f"\nscore: {passed}/{len(cases)} ({accuracy:.0%})")
+    print(f"synonym cases: {synonyms[0]}/{synonyms[1]}  (label had to be mapped from another word)")
+    print(f"unclear declines: {declines[0]}/{declines[1]}  (must decline: times, categories, several labels...)")
 
     print("\nconfusions (expected -> routed):")
     for (expected, routed), n in confusions.most_common():
