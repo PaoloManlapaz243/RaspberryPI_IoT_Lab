@@ -132,8 +132,7 @@ def most_common(since_minutes=None):
     return {"since_minutes": since_minutes, "top": [[r["class_name"], r["n"]] for r in rows]}
 
 def last_seen(label):
-    if not label:                       # model passed null/empty -> treat as "last detection of anything"
-        return recent(1)
+    #label is required: validate_call() rejects a missing one (use recent(1) instead)
     label = _normalize_label(label)
     rows = _query(
         "SELECT entered_at, exited_at FROM tracks WHERE class_name = ? "
@@ -176,62 +175,147 @@ FUNCTIONS = {
 ROUTER_SYSTEM = """You convert a question about camera detection data into ONE function call.
 Each time an object enters the camera's view counts as one "visit".
 
-Functions:
-- present_now(): what is in view RIGHT NOW. Use for "is anyone there", "what do you see now",
-  "who's here".
-- recent(n): the n most recent visits, regardless of label. Use this for
-  "last detection", "latest", "what did you just see", "most recent". For "the last
-  detection" use n=1.
-- count(label, since_minutes): how many visits by a label. label=null means everything.
-- most_common(since_minutes): which labels visit most often
-- last_seen(label): when a SPECIFIC named label was last seen. Only use this when the
-  question names a specific object (e.g. "when did you last see a person"). Never call it
-  with label=null -- if no specific label is named, use recent(1) instead.
-- labels_available(): which labels have ever been detected
+Functions (name: args):
+- present_now: no args. What is in view RIGHT NOW ("is anyone there", "who's here").
+- recent: n. The n most recent visits of anything. "what did you just see" or
+  "the last thing" -> n=1.
+- count: label, since_minutes. HOW MANY visits. label=null counts every label.
+- most_common: since_minutes. Which labels visit MOST OFTEN.
+- last_seen: label. WHEN a specific named object was last seen.
+- labels_available: no args. Which label NAMES have ever been seen (a list, not counts).
+- unknown: no args. Anything the functions above can't answer.
 
 Rules:
-- Reply with ONLY JSON: {"function": "<name>", "args": {...}}
-- Labels are singular and lowercase, e.g. "person", "car", "dog".
-- Time to minutes: "last hour"->60, "today"->1440, "last 10 minutes"->10. No time mentioned -> null.
-- If the question cannot be answered by these functions, reply {"function": "unknown", "args": {}}.
+- Labels are singular and lowercase: "person", "car", "dog", "cell phone".
+- since_minutes is a time window: "last hour"->60, "today"->1440, "past 30 minutes"->30.
+  If the question gives NO time window, since_minutes is null (all time). Never use 0.
+- "How many" questions use count, even when they mention visits.
+
+Examples:
+Q: how many trucks have shown up in the past 30 minutes?
+A: {"function": "count", "args": {"label": "truck", "since_minutes": 30}}
+Q: has anything at all come by in the last 2 hours?
+A: {"function": "count", "args": {"label": null, "since_minutes": 120}}
+Q: what type of object shows up the most overall?
+A: {"function": "most_common", "args": {"since_minutes": null}}
+Q: anything in front of the camera?
+A: {"function": "present_now", "args": {}}
 """
 
-def _ollama(messages, force_json=False, temperature=0.0):
+#Which args each function accepts. The single source for validation; the
+#schema's function names come from FUNCTIONS, so neither can drift from the code.
+ALLOWED_ARGS = {
+    "present_now": set(),
+    "recent": {"n"},
+    "count": {"label", "since_minutes"},
+    "most_common": {"since_minutes"},
+    "last_seen": {"label"},
+    "labels_available": set(),
+    "unknown": set(),
+}
+#Args that must be present (non-null). Missing -> rejected, so the model retries
+REQUIRED_ARGS = {"last_seen": {"label"}}
+
+#Fail at startup if a function is added to FUNCTIONS without its args here
+assert set(ALLOWED_ARGS) == set(FUNCTIONS) | {"unknown"}, "ALLOWED_ARGS out of sync with FUNCTIONS"
+
+#Ollama enforces this WHILE the model generates (constrained decoding): tokens
+#that would break it are never produced, so e.g. "present_now()" is impossible.
+#It guarantees shape and types only; validate_call() checks meaning.
+ROUTER_SCHEMA = {
+    "type": "object",
+    "required": ["function", "args"],
+    "properties": {
+        "function": {"type": "string", "enum": list(FUNCTIONS) + ["unknown"]},
+        "args": {
+            "type": "object",
+            "properties": {
+                "label":         {"type": ["string", "null"]},
+                "since_minutes": {"type": ["integer", "null"]},
+                "n":             {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+class InvalidCall(ValueError):
+    pass
+
+def validate_call(call):
+    """Check a routed call against ALLOWED_ARGS and value rules. Returns a clean
+    {"function", "args"} dict, or raises InvalidCall saying what's wrong.
+    Rejects rather than guesses: a wrong guess silently runs the wrong query."""
+    if not isinstance(call, dict):
+        raise InvalidCall("reply must be a JSON object")
+    name = call.get("function")
+    if name not in ALLOWED_ARGS:
+        raise InvalidCall(f"unknown function {name!r}")
+
+    args = {}
+    for key, value in (call.get("args") or {}).items():
+        if value is None:
+            continue                     #null = not given
+        if key not in ALLOWED_ARGS[name]:
+            raise InvalidCall(f"{name} does not take {key}")
+        args[key] = value
+
+    missing = REQUIRED_ARGS.get(name, set()) - set(args)
+    if missing:
+        hint = " (for the last thing of any kind, use recent with n=1)" if name == "last_seen" else ""
+        raise InvalidCall(f"{name} requires {', '.join(sorted(missing))}{hint}")
+
+    if "since_minutes" in args:
+        m = args["since_minutes"]
+        if isinstance(m, bool) or not isinstance(m, int) or m < 1:
+            raise InvalidCall("since_minutes must be a whole number >= 1, or null for all time")
+    if "n" in args:
+        n = args["n"]
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 50:
+            raise InvalidCall("n must be a whole number from 1 to 50")
+    if "label" in args and not (isinstance(args["label"], str) and args["label"].strip()):
+        raise InvalidCall("label must be a non-empty string, or null")
+
+    return {"function": name, "args": args}
+
+def _ollama(messages, schema=None, temperature=0.0):
     body = {
         "model": MODEL,
         "messages": messages,
         "stream": False,
         "options": {"temperature": temperature},
     }
-    if force_json:
-        body["format"] = "json"   # Ollama constrains output to valid JSON
+    if schema is not None:
+        body["format"] = schema   # constrain output to this JSON schema
     r = requests.post(OLLAMA_URL, json=body, timeout=120)
     r.raise_for_status()
     return r.json()["message"]["content"]
 
 def route(question, verbose=True):
-    content = _ollama(
-        [{"role": "system", "content": ROUTER_SYSTEM},
-         {"role": "user", "content": question}],
-        force_json=True,
-    )
-    if verbose:
-        print("[route]", content)   # debug: shows the model's raw decision
-    try:
-        return json.loads(content)
-    except Exception:
-        return {"function": "unknown", "args": {}}
+    """Question -> validated call. One retry: the model sees its invalid reply
+    and the reason. Returns {"function": "invalid", ...} if both attempts fail."""
+    messages = [{"role": "system", "content": ROUTER_SYSTEM},
+                {"role": "user", "content": question}]
+    error = None
+    for attempt in range(2):
+        content = _ollama(messages, schema=ROUTER_SCHEMA)
+        if verbose:
+            print("[route]", content)   # debug: shows the model's raw decision
+        try:
+            return validate_call(json.loads(content))
+        except ValueError as e:         #bad JSON or InvalidCall
+            error = str(e)
+            if verbose:
+                print("[route] invalid:", error)
+            messages += [{"role": "assistant", "content": content},
+                         {"role": "user", "content": f"That call is invalid: {error}. "
+                                                     "Reply with the corrected JSON only."}]
+    return {"function": "invalid", "args": {}, "error": error}
 
 def execute(call):
-    name = call.get("function")
-    args = call.get("args", {}) or {}
-    if name not in FUNCTIONS:
-        return None
-    try:
-        return FUNCTIONS[name](**args)
-    except (TypeError, ValueError):
-        # model passed wrong/extra args -- be lenient rather than crash
-        return {"error": "bad_args", "call": call}
+    #Only ever given validated calls (see route), so args are known-good
+    return FUNCTIONS[call["function"]](**call["args"])
 
 PHRASE_SYSTEM = """Answer the user's question in ONE short, plain-English sentence,
 using ONLY the data provided. Never invent numbers. Times are already in local time.
@@ -248,14 +332,14 @@ def phrase(question, result):
 
 def answer(question):
     call = route(question)
-    if call.get("function") == "unknown":
+    if call["function"] == "unknown":
         return ("I can only answer questions about detections: what's in view now, counts, "
                 "recent visits, the most common label, when something was last seen, "
                 "or which labels I track.")
-    result = execute(call)
-    if result is None:
-        return "I couldn't map that to something I can look up."
-    return phrase(question, result)
+    if call["function"] == "invalid":
+        return ("I wasn't sure how to look that up. Try rephrasing, e.g. with an object "
+                "name or a time range like 'in the last hour'.")
+    return phrase(question, execute(call))
 
 
 # ============ optional: log each Q&A to DynamoDB ============
