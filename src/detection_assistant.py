@@ -407,8 +407,7 @@ def unsupported_features(question):
 
 def route(question, verbose=True):
     """Question -> validated call, or {"function": "unclear"/"invalid", ...}.
-    The guard runs first; otherwise one model call, validated, with one retry
-    that shows the model its invalid reply and the reason."""
+    The guard checks the question before the model and the model's answer after."""
     if USE_GUARD:
         found = unsupported_features(question)
         if found:
@@ -417,6 +416,21 @@ def route(question, verbose=True):
             #No model call at all: faster on the Pi, and can't be talked out of it
             return {"function": "unclear", "args": {}, "reason": found}
 
+    call = _ask_model(question, verbose)
+
+    if USE_GUARD:
+        #The model may answer for one object when the question names another
+        #("people and dogs" -> count(person)): decline instead of dropping one
+        other = labels_mentioned(question) - {call["args"].get("label")}
+        if call["args"].get("label") and other:
+            if verbose:
+                print("[route] guard: question also names", ", ".join(sorted(other)))
+            return {"function": "unclear", "args": {}, "reason": ["several object types at once"]}
+    return call
+
+def _ask_model(question, verbose):
+    """One model call, validated, with one retry that shows the model its
+    invalid reply and the reason."""
     messages = [{"role": "system", "content": ROUTER_SYSTEM},
                 {"role": "user", "content": question}]
     error = None
