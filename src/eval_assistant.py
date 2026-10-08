@@ -106,6 +106,8 @@ CASES = [
     ("how long did the last person stay?",            "unclear",          {}),
     ("was anyone here at 3pm?",                       "unclear",          {}),
     ("is anyone wearing a hat?",                      "unclear",          {}),
+    ("how many kitchen utensils were seen?",          "unclear",          {}),
+    ("how many sports items showed up?",              "unclear",          {}),
     # --- off-topic
     ("what's the weather like?",                      "unknown",          {}),
     ("tell me a joke",                                "unknown",          {}),
@@ -160,6 +162,15 @@ HELD_OUT = [
     #Categories (several detector labels): must decline, not pick one label
     ("how many electronics were seen?",                 "unclear",          {}),
     ("how much furniture has been detected?",           "unclear",          {}),
+    #Added 2026-10-08 before any run, for the ADR 0006 regressions (ADR 0007).
+    #Several objects, one named by a synonym ("folks") and one literally:
+    ("how many folks and cats came by?",                "unclear",          {}),
+    ("how many lads and dogs came by today?",           "unclear",          {}),
+    #Both sides synonyms: the post-routing label check can't see this one
+    ("were there more pups or kittens?",                "unclear",          {}),
+    #More categories
+    ("how many pets came by today?",                    "unclear",          {}),
+    ("how much wildlife was spotted?",                  "unclear",          {}),
 ]
 
 
