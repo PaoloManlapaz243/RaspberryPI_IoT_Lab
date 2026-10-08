@@ -11,6 +11,7 @@ Run (Ollama must be running):
   python src/eval_assistant.py llama3.2:1b           # try another model
   python src/eval_assistant.py --held-out            # held-out set (see below)
   python src/eval_assistant.py --verbose             # print passing cases too
+  python src/eval_assistant.py --no-guard            # measure without the code guard (ADR 0005)
 
 Two sets:
   CASES     the tuning set. Prompt changes are made while looking at these
@@ -204,9 +205,12 @@ def main():
     if models:
         da.MODEL = models[0]
     verbose = "--verbose" in flags
+    if "--no-guard" in flags:
+        da.USE_GUARD = False
     held_out = "--held-out" in flags
     cases, name = (HELD_OUT, "held-out") if held_out else (CASES, "tuning")
-    print(f"model={da.MODEL}  set={name}  cases={len(cases)}\n")
+    print(f"model={da.MODEL}  set={name}  cases={len(cases)}  "
+          f"guard={da.USE_GUARD}\n")
 
     counts = _instrument()
     passed, retried, total_calls, to_chat = 0, 0, 0, []

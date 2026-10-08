@@ -23,6 +23,7 @@ Run:
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 import requests
@@ -41,6 +42,10 @@ MODEL_METADATA = PROJECT_ROOT / "models" / "yolo11n_ncnn_model" / "metadata.yaml
 OLLAMA_URL   = "http://localhost:11434/api/chat"
 MODEL        = "gemma2:2b"      # try "qwen2.5:3b" if routing is flaky
 USE_LLM_PHRASING = True         # False = skip 2nd model call, faster but less natural
+
+#Code check for things no function supports -> unclear, before any model call
+#(ADR 0005). Measure without it: python src/eval_assistant.py --no-guard
+USE_GUARD = True
 
 # chat logging to DynamoDB via MQTT (reuses your IoT cert -- no new credentials).
 # A second IoT rule routes topic 'chat/logs' -> chat_logs table (docs/aws-setup.md).
@@ -359,10 +364,43 @@ def _ollama(messages, schema=None, temperature=0.0):
     r.raise_for_status()
     return r.json()["message"]["content"]
 
+#Things no function can answer, found in the question text itself. A 2B model
+#reads "use unclear for clock times" and still turns "since 9am" into
+#since_minutes=1440, answering a different question with real data. Code can't
+#be talked out of a rule.
+UNSUPPORTED_PATTERNS = [
+    (re.compile(r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\bnoon\b|\bmidnight\b|\bo'?clock\b"), "a clock time"),
+    (re.compile(r"\bthis (morning|afternoon|evening)\b|\btonight\b|\blast night\b"), "a part of the day"),
+    (re.compile(r"\byesterday\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\blast (week|month)\b"), "a past day"),
+    (re.compile(r"\bhow long\b|\bduration\b"), "how long something stayed"),
+]
+
+def labels_mentioned(question):
+    """Detector labels named in the question, via the same canonical_label()
+    validation uses ("people and dogs" -> {"person", "dog"})."""
+    words = re.findall(r"[a-z]+", question.lower())
+    candidates = words + [f"{a} {b}" for a, b in zip(words, words[1:])]
+    return {label for label in map(canonical_label, candidates) if label}
+
+def unsupported_features(question):
+    q = question.lower()
+    found = [why for pattern, why in UNSUPPORTED_PATTERNS if pattern.search(q)]
+    if len(labels_mentioned(question)) >= 2:
+        found.append("several object types at once")
+    return found
+
 def route(question, verbose=True):
     """Question -> validated call, or {"function": "unclear"/"invalid", ...}.
-    One model call, validated, with one retry that shows the model its invalid
-    reply and the reason."""
+    The guard runs first; otherwise one model call, validated, with one retry
+    that shows the model its invalid reply and the reason."""
+    if USE_GUARD:
+        found = unsupported_features(question)
+        if found:
+            if verbose:
+                print("[route] guard: needs", ", ".join(found))
+            #No model call at all: faster on the Pi, and can't be talked out of it
+            return {"function": "unclear", "args": {}, "reason": found}
+
     messages = [{"role": "system", "content": ROUTER_SYSTEM},
                 {"role": "user", "content": question}]
     error = None
