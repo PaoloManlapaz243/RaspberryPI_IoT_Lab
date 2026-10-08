@@ -24,9 +24,11 @@ python main.py          # press 'q' in the preview window to quit
 - Python 3.12 venv in `.venv/` (ultralytics, opencv-python, ncnn, paho-mqtt 2.x, requests; SQLite from the stdlib).
 - `python src/detection_assistant.py` runs the Ollama Q&A assistant as a
   separate process (needs Ollama + the `MODEL` it names).
-- `python src/eval_assistant.py [model] [--held-out]` scores the assistant's
-  routing. Run it before and after any prompt or model change; never tune
-  against the held-out set.
+- `python src/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
+  scores the assistant's routing (accuracy, misroutes to chat, retries,
+  latency). Run it before and after any prompt or model change; never tune
+  against the held-out set. The chat-feature gate is held-out >= 90% and 0
+  misroutes to chat.
 - There is no test suite. Quick sanity check without a camera:
   `python -m py_compile src/*.py src/threads/*.py`
 - `main.py` needs a real camera at `/dev/video0` (`src=0`) and a display
@@ -71,6 +73,16 @@ decision rather than editing an accepted one.
 - `0004-structured-model-output.md`: model output is constrained (JSON schema),
   validated (reject + one retry, never guess), and measured (eval with a
   held-out set).
+- `0005-routing-evaluation.md`: 50/30 eval with safety metrics, `unclear`
+  intent, labels validated against the detector's vocabulary, code guard for
+  unsupported questions; two-stage routing measured and rejected.
+- `0006-label-vocabulary-in-schema.md`: the router's `label` is an enum of the
+  detector's labels (+ `not_a_detector_label`, null); the model maps words, with no
+  hand-written synonym table.
+- `0007-per-function-schema-and-label-check.md`: `ROUTER_SCHEMA` is generated
+  per function (`anyOf`, exact args, all present); `route()` = guard question →
+  `_ask_model()` → guard answer (literal second label → unclear). The
+  chat-feature gate decision is open there.
 
 ## Current state (in progress)
 - Events go to `logs/events.db` (gitignored). Inspect with
@@ -88,7 +100,10 @@ decision rather than editing an accepted one.
   targets, shared `threading.Event`s passed in through constructors.
 - Put new thread workers in `src/threads/`.
 - Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
-  `REQUIRED_ARGS`, the router prompt, and eval cases (ADR 0004).
+  `REQUIRED_ARGS`, the router prompt, eval cases, and check
+  `UNSUPPORTED_PATTERNS` (ADRs 0004-0006).
+- The assistant reads the detector's labels from
+  `models/yolo11n_ncnn_model/metadata.yaml`, so run `ncnn_export.py` first.
 - Secrets live in `certs/` and `.env`. Never read, print, or commit them.
 - `aws-iot-device-sdk-python-v2/` is a vendored, gitignored SDK the code doesn't
   use. Ignore it when searching.

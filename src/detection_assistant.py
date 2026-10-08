@@ -23,6 +23,7 @@ Run:
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 import requests
@@ -35,9 +36,16 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH      = PROJECT_ROOT / "logs" / "events.db"   # same file main.py writes to
 
+#The detector's label vocabulary (same exported model main.py loads)
+MODEL_METADATA = PROJECT_ROOT / "models" / "yolo11n_ncnn_model" / "metadata.yaml"
+
 OLLAMA_URL   = "http://localhost:11434/api/chat"
 MODEL        = "gemma2:2b"      # try "qwen2.5:3b" if routing is flaky
 USE_LLM_PHRASING = True         # False = skip 2nd model call, faster but less natural
+
+#Code check for things no function supports -> unclear, before any model call
+#(ADR 0005). Measure without it: python src/eval_assistant.py --no-guard
+USE_GUARD = True
 
 # chat logging to DynamoDB via MQTT (reuses your IoT cert -- no new credentials).
 # A second IoT rule routes topic 'chat/logs' -> chat_logs table (docs/aws-setup.md).
@@ -86,18 +94,32 @@ def _since_clause(since_minutes, column):
         return "", ()
     return f" AND {column} >= ?", (_utc_cutoff(since_minutes),)
 
-def _normalize_label(label):
-    """Map the model's phrasing ("People", "cars") onto YOLO's labels
-    ("person", "car"). None stays None (= everything)."""
-    if label is None:
-        return None
+def _load_detector_labels():
+    """The 80 labels YOLO can output. Validation rejects anything else, so a
+    question about "vehicles" can't silently become count("vehicle") = 0."""
+    import yaml
+    with open(MODEL_METADATA) as f:
+        return {str(name).lower() for name in yaml.safe_load(f)["names"].values()}
+
+DETECTOR_LABELS = _load_detector_labels()
+
+#The model's way of saying "no detector label fits" (a category like
+#"vehicles", or something the detector can't see). Without it, the label enum
+#would force a pick, and "vehicles" could silently become "car".
+NOT_A_DETECTOR_LABEL = "not_a_detector_label"
+
+def canonical_label(label):
+    """Exact detector label for a word, or None. Model-agnostic on purpose: only
+    case and simple plurals ("Dogs" -> "dog"). Mapping everyday words to labels
+    ("pedestrians" -> "person") is the model's job, constrained by the label
+    enum in ROUTER_SCHEMA; no hand-written synonym table to keep in sync."""
     label = str(label).strip().lower()
-    known = {row["class_name"] for row in _query("SELECT DISTINCT class_name FROM events")}
-    irregular = {"people": "person", "persons": "person", "men": "person", "women": "person"}
-    for candidate in (label, irregular.get(label), label[:-1] if label.endswith("s") else None):
-        if candidate in known:
+    for candidate in (label,
+                      label[:-1] if label.endswith("s") else None,
+                      label[:-2] if label.endswith("es") else None):
+        if candidate in DETECTOR_LABELS:
             return candidate
-    return label   # unknown label: queries simply return 0 / nothing
+    return None
 
 def _time_window(since_minutes):
     """since_minutes -> plain words for the phrasing model. Results never pass it
@@ -128,7 +150,7 @@ def recent(n=5):
         for v in visits]}
 
 def count(label=None, since_minutes=None):
-    label = _normalize_label(label)
+    #label is already a detector label: validate_call() canonicalizes it
     label_sql, label_params = ("", ()) if label is None else (" AND class_name = ?", (label,))
     since_sql, since_params = _since_clause(since_minutes, "ts")
     rows = _query(
@@ -146,8 +168,8 @@ def most_common(since_minutes=None):
             "top": [[r["class_name"], r["n"]] for r in rows]}
 
 def last_seen(label):
-    #label is required: validate_call() rejects a missing one (use recent(1) instead)
-    label = _normalize_label(label)
+    #label is required and canonical: validate_call() rejects a missing or unknown
+    #one (for "the last thing of any kind", the model is told to use recent(1))
     rows = _query(
         "SELECT entered_at, exited_at FROM tracks WHERE class_name = ? "
         "ORDER BY entered_at DESC LIMIT 1", (label,))
@@ -190,22 +212,36 @@ ROUTER_SYSTEM = """You convert a question about camera detection data into ONE f
 Each time an object enters the camera's view counts as one "visit".
 
 Functions (name: args):
-- present_now: no args. What is in view RIGHT NOW ("is anyone there", "who's here").
+- present_now: no args. What is in view RIGHT NOW, including whether it is empty
+  ("is anyone there", "who's here", "is it clear").
 - recent: n. The n most recent visits of anything. "what did you just see" or
   "the last thing" -> n=1.
 - count: label, since_minutes. HOW MANY visits. label=null counts every label.
-- most_common: since_minutes. Which labels visit MOST OFTEN.
+- most_common: since_minutes. Which labels visit MOST OFTEN ("top", "most", "usually").
 - last_seen: label. WHEN a specific named object was last seen.
 - labels_available: no args. Which label NAMES have ever been seen (a list, not counts).
-- unknown: no args. Anything the functions above can't answer.
+- unclear: no args. The question IS about the camera, people, or objects, but no
+  function above answers it exactly. Use unclear when it needs:
+    * a clock time or a day ("at 5pm", "since noon", "this morning", "yesterday")
+    * several labels or a category ("cats and dogs", "vehicles", "animals")
+    * how long something stayed, or what something looked like (color, clothing)
+- unknown: no args. ONLY for questions with nothing to do with the camera, people,
+  objects, or the room (weather, math, jokes, greetings, general knowledge).
 
 Rules:
-- Labels are singular and lowercase: "person", "car", "dog", "cell phone".
+- label must be ONE of the detector's labels: {LABELS}.
+  Map everyday words to the closest label (e.g. "tabbies" -> cat). If the question is
+  about a category of objects or something not in the list, use "not_a_detector_label".
+  Never pick a different object just because it is in the list.
 - since_minutes is a time window: "last hour"->60, "today"->1440, "past 30 minutes"->30.
-  If the question gives NO time window, since_minutes is null (all time). Never use 0.
+  If the question gives NO time window, since_minutes is null (all time). Never invent
+  one, and never use 0.
 - "How many" questions use count, even when they mention visits.
+- Prefer unclear over a function that would answer a different question.
 
 Examples:
+Q: how many tabbies came by today?
+A: {"function": "count", "args": {"label": "cat", "since_minutes": 1440}}
 Q: how many trucks have shown up in the past 30 minutes?
 A: {"function": "count", "args": {"label": "truck", "since_minutes": 30}}
 Q: has anything at all come by in the last 2 hours?
@@ -214,7 +250,11 @@ Q: what type of object shows up the most overall?
 A: {"function": "most_common", "args": {"since_minutes": null}}
 Q: anything in front of the camera?
 A: {"function": "present_now", "args": {}}
-"""
+Q: how many buses came by after lunch?
+A: {"function": "unclear", "args": {}}
+Q: what's the capital of France?
+A: {"function": "unknown", "args": {}}
+""".replace("{LABELS}", ", ".join(sorted(DETECTOR_LABELS)))
 
 #Which args each function accepts. The single source for validation; the
 #schema's function names come from FUNCTIONS, so neither can drift from the code.
@@ -225,34 +265,54 @@ ALLOWED_ARGS = {
     "most_common": {"since_minutes"},
     "last_seen": {"label"},
     "labels_available": set(),
+    "unclear": set(),
     "unknown": set(),
 }
 #Args that must be present (non-null). Missing -> rejected, so the model retries
 REQUIRED_ARGS = {"last_seen": {"label"}}
 
+#Intents that aren't functions: unclear (about detections, no function fits ->
+#ask to rephrase) and unknown (off-topic). Neither ever reads the DB.
+NON_FUNCTION_INTENTS = ["unclear", "unknown"]
+
 #Fail at startup if a function is added to FUNCTIONS without its args here
-assert set(ALLOWED_ARGS) == set(FUNCTIONS) | {"unknown"}, "ALLOWED_ARGS out of sync with FUNCTIONS"
+assert set(ALLOWED_ARGS) == set(FUNCTIONS) | set(NON_FUNCTION_INTENTS), "ALLOWED_ARGS out of sync with FUNCTIONS"
+
+#Schema for each argument. The label enum is the detector's own vocabulary
+#(metadata.yaml): a real label, the sentinel, or null (= every label).
+ARG_SCHEMAS = {
+    "label":         {"enum": sorted(DETECTOR_LABELS) + [NOT_A_DETECTOR_LABEL, None]},
+    "since_minutes": {"type": ["integer", "null"]},
+    "n":             {"type": "integer"},
+}
+
+def _non_null(schema):
+    if "enum" in schema:
+        return {"enum": [v for v in schema["enum"] if v is not None]}
+    return {"type": [t for t in schema["type"] if t != "null"]}
+
+def _function_schema(name):
+    #Exactly this function's args, all present: the model must decide each one
+    #(null included) instead of leaving it out. Required args can't be null.
+    args = sorted(ALLOWED_ARGS[name])
+    required = REQUIRED_ARGS.get(name, set())
+    return {
+        "type": "object",
+        "required": ["function", "args"],
+        "properties": {
+            "function": {"const": name},
+            "args": {"type": "object", "required": args, "additionalProperties": False,
+                     "properties": {a: _non_null(ARG_SCHEMAS[a]) if a in required else ARG_SCHEMAS[a]
+                                    for a in args}},
+        },
+        "additionalProperties": False,
+    }
 
 #Ollama enforces this WHILE the model generates (constrained decoding): tokens
-#that would break it are never produced, so e.g. "present_now()" is impossible.
+#that would break it are never produced. One branch per function, generated
+#from ALLOWED_ARGS, so a function can't be called with missing or extra args.
 #It guarantees shape and types only; validate_call() checks meaning.
-ROUTER_SCHEMA = {
-    "type": "object",
-    "required": ["function", "args"],
-    "properties": {
-        "function": {"type": "string", "enum": list(FUNCTIONS) + ["unknown"]},
-        "args": {
-            "type": "object",
-            "properties": {
-                "label":         {"type": ["string", "null"]},
-                "since_minutes": {"type": ["integer", "null"]},
-                "n":             {"type": "integer"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    "additionalProperties": False,
-}
+ROUTER_SCHEMA = {"anyOf": [_function_schema(name) for name in ALLOWED_ARGS]}
 
 class InvalidCall(ValueError):
     pass
@@ -269,6 +329,10 @@ def validate_call(call):
 
     args = {}
     for key, value in (call.get("args") or {}).items():
+        #Small models sometimes write the STRING "null" where the schema allows
+        #null; that is unambiguous, so it's normalized rather than rejected
+        if isinstance(value, str) and value.strip().lower() in ("null", "none"):
+            value = None
         if value is None:
             continue                     #null = not given
         if key not in ALLOWED_ARGS[name]:
@@ -288,8 +352,18 @@ def validate_call(call):
         n = args["n"]
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 50:
             raise InvalidCall("n must be a whole number from 1 to 50")
-    if "label" in args and not (isinstance(args["label"], str) and args["label"].strip()):
-        raise InvalidCall("label must be a non-empty string, or null")
+    if args.get("label") == NOT_A_DETECTOR_LABEL:
+        #A decline, not a format error: no retry, go straight to unclear
+        return {"function": "unclear", "args": {}, "reason": ["no detector label fits"]}
+    if "label" in args:
+        if not (isinstance(args["label"], str) and args["label"].strip()):
+            raise InvalidCall("label must be a non-empty string, or null")
+        canonical = canonical_label(args["label"])
+        if canonical is None:
+            raise InvalidCall(f"{args['label']!r} is not a label the detector knows. Use one "
+                              "detector label (e.g. person, car, dog), or unclear if the "
+                              "question needs a category or several labels")
+        args["label"] = canonical
 
     return {"function": name, "args": args}
 
@@ -306,9 +380,57 @@ def _ollama(messages, schema=None, temperature=0.0):
     r.raise_for_status()
     return r.json()["message"]["content"]
 
+#Things no function can answer, found in the question text itself. A 2B model
+#reads "use unclear for clock times" and still turns "since 9am" into
+#since_minutes=1440, answering a different question with real data. Code can't
+#be talked out of a rule.
+UNSUPPORTED_PATTERNS = [
+    (re.compile(r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\bnoon\b|\bmidnight\b|\bo'?clock\b"), "a clock time"),
+    (re.compile(r"\bthis (morning|afternoon|evening)\b|\btonight\b|\blast night\b"), "a part of the day"),
+    (re.compile(r"\byesterday\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\blast (week|month)\b"), "a past day"),
+    (re.compile(r"\bhow long\b|\bduration\b"), "how long something stayed"),
+]
+
+def labels_mentioned(question):
+    """Detector labels named in the question, via the same canonical_label()
+    validation uses ("people and dogs" -> {"person", "dog"})."""
+    words = re.findall(r"[a-z]+", question.lower())
+    candidates = words + [f"{a} {b}" for a, b in zip(words, words[1:])]
+    return {label for label in map(canonical_label, candidates) if label}
+
+def unsupported_features(question):
+    q = question.lower()
+    found = [why for pattern, why in UNSUPPORTED_PATTERNS if pattern.search(q)]
+    if len(labels_mentioned(question)) >= 2:
+        found.append("several object types at once")
+    return found
+
 def route(question, verbose=True):
-    """Question -> validated call. One retry: the model sees its invalid reply
-    and the reason. Returns {"function": "invalid", ...} if both attempts fail."""
+    """Question -> validated call, or {"function": "unclear"/"invalid", ...}.
+    The guard checks the question before the model and the model's answer after."""
+    if USE_GUARD:
+        found = unsupported_features(question)
+        if found:
+            if verbose:
+                print("[route] guard: needs", ", ".join(found))
+            #No model call at all: faster on the Pi, and can't be talked out of it
+            return {"function": "unclear", "args": {}, "reason": found}
+
+    call = _ask_model(question, verbose)
+
+    if USE_GUARD:
+        #The model may answer for one object when the question names another
+        #("people and dogs" -> count(person)): decline instead of dropping one
+        other = labels_mentioned(question) - {call["args"].get("label")}
+        if call["args"].get("label") and other:
+            if verbose:
+                print("[route] guard: question also names", ", ".join(sorted(other)))
+            return {"function": "unclear", "args": {}, "reason": ["several object types at once"]}
+    return call
+
+def _ask_model(question, verbose):
+    """One model call, validated, with one retry that shows the model its
+    invalid reply and the reason."""
     messages = [{"role": "system", "content": ROUTER_SYSTEM},
                 {"role": "user", "content": question}]
     error = None
@@ -365,6 +487,11 @@ def answer(question):
         return ("I can only answer questions about detections: what's in view now, counts, "
                 "recent visits, the most common label, when something was last seen, "
                 "or which labels I track.")
+    if call["function"] == "unclear":
+        return ("I can't answer that exactly from the detection log. I can count or find "
+                "one kind of object at a time, over a recent window like 'the last hour' "
+                "or 'today', but not clock times, past days, groups of objects, how long "
+                "something stayed, or what it looked like.")
     if call["function"] == "invalid":
         return ("I wasn't sure how to look that up. Try rephrasing, e.g. with an object "
                 "name or a time range like 'in the last hour'.")
