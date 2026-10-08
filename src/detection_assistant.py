@@ -99,6 +99,18 @@ def _normalize_label(label):
             return candidate
     return label   # unknown label: queries simply return 0 / nothing
 
+def _time_window(since_minutes):
+    """since_minutes -> plain words for the phrasing model. Results never pass it
+    a raw null: to our code null means "all time", but the model reads it as
+    "missing" and says nothing was found."""
+    if since_minutes is None:
+        return "all time"
+    m = int(since_minutes)
+    if m % 60 == 0:
+        hours = m // 60
+        return "the last hour" if hours == 1 else f"the last {hours} hours"
+    return "the last minute" if m == 1 else f"the last {m} minutes"
+
 def _latest_run_id():
     rows = _query("SELECT run_id FROM events ORDER BY id DESC LIMIT 1")
     return rows[0]["run_id"] if rows else None
@@ -122,14 +134,16 @@ def count(label=None, since_minutes=None):
     rows = _query(
         "SELECT COUNT(*) AS n FROM events WHERE event_type = 'enter'" + label_sql + since_sql,
         label_params + since_params)
-    return {"label": label, "since_minutes": since_minutes, "visits": rows[0]["n"]}
+    return {"label": label or "anything", "time_window": _time_window(since_minutes),
+            "visits": rows[0]["n"]}
 
 def most_common(since_minutes=None):
     since_sql, since_params = _since_clause(since_minutes, "ts")
     rows = _query(
         "SELECT class_name, COUNT(*) AS n FROM events WHERE event_type = 'enter'" + since_sql +
         " GROUP BY class_name ORDER BY n DESC LIMIT 3", since_params)
-    return {"since_minutes": since_minutes, "top": [[r["class_name"], r["n"]] for r in rows]}
+    return {"time_window": _time_window(since_minutes),
+            "top": [[r["class_name"], r["n"]] for r in rows]}
 
 def last_seen(label):
     #label is required: validate_call() rejects a missing one (use recent(1) instead)
@@ -138,7 +152,7 @@ def last_seen(label):
         "SELECT entered_at, exited_at FROM tracks WHERE class_name = ? "
         "ORDER BY entered_at DESC LIMIT 1", (label,))
     if not rows:
-        return {"label": label, "last_seen": None}
+        return {"label": label, "last_seen": "never"}
     #exited_at is the last sighting (see ADR 0001); NULL = still in view
     if rows[0]["exited_at"] is None:
         return {"label": label, "last_seen": "right now (still in view)"}
@@ -319,9 +333,24 @@ def execute(call):
 
 PHRASE_SYSTEM = """Answer the user's question in ONE short, plain-English sentence,
 using ONLY the data provided. Never invent numbers. Times are already in local time.
-If the data is empty or null, say that nothing matching was found."""
+Use the time_window exactly as given (e.g. "the last hour", "all time").
+Only if a count is 0, a list is empty, or last_seen is "never", say that nothing
+matching was found."""
+
+def _assert_no_nulls(value, path="result"):
+    #Results go to the model as JSON; a null there gets misread as "nothing
+    #found". Fail loudly in development instead of answering wrongly.
+    if value is None:
+        raise AssertionError(f"{path} is null; give the model plain words instead")
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _assert_no_nulls(v, f"{path}.{k}")
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _assert_no_nulls(v, f"{path}[{i}]")
 
 def phrase(question, result):
+    _assert_no_nulls(result)
     if not USE_LLM_PHRASING:
         return str(result)
     return _ollama(
