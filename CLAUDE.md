@@ -85,6 +85,8 @@ decision rather than editing an accepted one.
   chat-feature gate decision is open there.
 
 ## Current state (in progress)
+- Open issues, pending decisions, and next steps: `docs/open-issues.md`.
+  Read it when resuming work; remove items in the commit that resolves them.
 - Events go to `logs/events.db` (gitignored). Inspect with
   `sqlite3 logs/events.db "SELECT * FROM tracks"`.
 - Shutdown order in `main.py` matters: producers join first, then the writer
