@@ -24,6 +24,9 @@ python main.py          # press 'q' in the preview window to quit
 - Python 3.12 venv in `.venv/` (ultralytics, opencv-python, ncnn, paho-mqtt 2.x, requests; SQLite from the stdlib).
 - `python src/detection_assistant.py` runs the Ollama Q&A assistant as a
   separate process (needs Ollama + the `MODEL` it names).
+- `python src/eval_assistant.py [model] [--held-out]` scores the assistant's
+  routing. Run it before and after any prompt or model change; never tune
+  against the held-out set.
 - There is no test suite. Quick sanity check without a camera:
   `python -m py_compile src/*.py src/threads/*.py`
 - `main.py` needs a real camera at `/dev/video0` (`src=0`) and a display
@@ -65,6 +68,9 @@ decision rather than editing an accepted one.
   SQLite log (replaces 0001's in-memory fan-out plan for option C).
 - `0003-detection-assistant.md`: assistant as a separate read-only process;
   model routes and phrases, code computes; counts are visits.
+- `0004-structured-model-output.md`: model output is constrained (JSON schema),
+  validated (reject + one retry, never guess), and measured (eval with a
+  held-out set).
 
 ## Current state (in progress)
 - Events go to `logs/events.db` (gitignored). Inspect with
@@ -81,6 +87,8 @@ decision rather than editing an accepted one.
 - Match the existing style: classes per component, `task_*` methods as thread
   targets, shared `threading.Event`s passed in through constructors.
 - Put new thread workers in `src/threads/`.
+- Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
+  `REQUIRED_ARGS`, the router prompt, and eval cases (ADR 0004).
 - Secrets live in `certs/` and `.env`. Never read, print, or commit them.
 - `aws-iot-device-sdk-python-v2/` is a vendored, gitignored SDK the code doesn't
   use. Ignore it when searching.
