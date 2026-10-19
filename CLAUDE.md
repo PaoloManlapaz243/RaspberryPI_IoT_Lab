@@ -11,43 +11,44 @@ logs detection events locally and to AWS IoT Core (MQTT → IoT Rule → DynamoD
 - Don't commit unless I ask. Don't touch `certs/`, `.env`, or AWS config.
 
 ## Run
-`main.py` resolves its paths from its own location, so it runs from any
-directory. `ncnn_export.py` still uses paths relative to `src/`:
+The code is the `iot_lab` package in `src/iot_lab/`, installed editable
+(`pip install -e ".[dev]"`; dependencies are in `pyproject.toml`). Paths are
+anchored to the code's location, so everything runs from any directory:
 
 ```bash
 source .venv/bin/activate
-cd src
-python ncnn_export.py   # one-time: models/yolo11n.pt -> models/yolo11n_ncnn_model/
-python main.py          # press 'q' in the preview window to quit
+python -m iot_lab.ncnn_export   # one-time: models/yolo11n.pt -> models/yolo11n_ncnn_model/
+python -m iot_lab.main          # press 'q' in the preview window to quit
 ```
 
-- Python 3.12 venv in `.venv/` (ultralytics, opencv-python, ncnn, paho-mqtt 2.x, requests; SQLite from the stdlib).
-- `python src/detection_assistant.py` runs the Ollama Q&A assistant as a
+- Python 3.12 venv in `.venv/`. Imports are absolute (`from iot_lab.threads.camera import ...`).
+- `python -m iot_lab.detection_assistant` runs the Ollama Q&A assistant as a
   separate process (needs Ollama + the `MODEL` it names).
-- `python src/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
+- `python evals/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
   scores the assistant's routing (accuracy, misroutes to chat, retries,
   latency). Run it before and after any prompt or model change; never tune
   against the held-out set. The chat-feature gate is held-out >= 90% and 0
   misroutes to chat.
-- There is no test suite. Quick sanity check without a camera:
-  `python -m py_compile src/*.py src/threads/*.py`
+- `pytest` runs the unit tests in `tests/` (under a second; no Ollama, camera,
+  or network). The assistant tests need `metadata.yaml` and say so if it's
+  missing.
 - `main.py` needs a real camera at `/dev/video0` (`src=0`) and a display
   unless `HEADLESS = True`.
 
 ## Architecture
-Five threads (camera, inference, event writer, AWS forwarder, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/main.py`:
+Five threads (camera, inference, event writer, AWS forwarder, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/iot_lab/main.py`:
 
 | Component | File | Role |
 |---|---|---|
-| `RasPiDeploy` | `src/main.py` | Owns events + queue, starts threads, runs the GUI loop on the main thread (OpenCV `imshow` must run there) |
-| `CameraHandler` | `src/threads/camera.py` | Producer: reads frames, stores the latest, sets `camera_frame_ready` |
-| `InferenceHandler` | `src/threads/object_detection.py` | Consumer: `model.track(persist=True)` on the latest frame, stores plotted frame, pushes `enter`/`exit` events per track into `queue.Queue` |
-| `GUIHandler` | `src/gui_handler.py` | Draws FPS and shows the plotted frame |
-| `EventWriter` | `src/threads/event_writer.py` | Consumer: drains the queue into SQLite, one insert per event; stops on a `None` sentinel |
-| `SQLiteHandler` | `src/sqlite_handler.py` | Storage only: `events` table, `tracks` view, `consumer_offsets` cursors, WAL mode. Must be created inside the thread that uses it |
-| `AWSForwarder` | `src/threads/aws_forwarder.py` | Store-and-forward: reads events after its cursor from SQLite, publishes in batches, advances the cursor only when the whole batch is acked |
-| `detection_assistant` | `src/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
-| `AWSPublisher` | `src/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
+| `RasPiDeploy` | `src/iot_lab/main.py` | Owns events + queue, starts threads, runs the GUI loop on the main thread (OpenCV `imshow` must run there) |
+| `CameraHandler` | `src/iot_lab/threads/camera.py` | Producer: reads frames, stores the latest, sets `camera_frame_ready` |
+| `InferenceHandler` | `src/iot_lab/threads/object_detection.py` | Consumer: `model.track(persist=True)` on the latest frame, stores plotted frame, pushes `enter`/`exit` events per track into `queue.Queue` |
+| `GUIHandler` | `src/iot_lab/gui_handler.py` | Draws FPS and shows the plotted frame |
+| `EventWriter` | `src/iot_lab/threads/event_writer.py` | Consumer: drains the queue into SQLite, one insert per event; stops on a `None` sentinel |
+| `SQLiteHandler` | `src/iot_lab/sqlite_handler.py` | Storage only: `events` table, `tracks` view, `consumer_offsets` cursors, WAL mode. Must be created inside the thread that uses it |
+| `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward: reads events after its cursor from SQLite, publishes in batches, advances the cursor only when the whole batch is acked |
+| `detection_assistant` | `src/iot_lab/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
+| `AWSPublisher` | `src/iot_lab/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
 Key design points:
 - "Latest frame wins": threads share the most recent frame via an attribute,
@@ -83,6 +84,9 @@ decision rather than editing an accepted one.
   per function (`anyOf`, exact args, all present); `route()` = guard question →
   `_ask_model()` → guard answer (literal second label → unclear). The
   chat-feature gate decision is open there.
+- `0008-project-layout.md`: installable `iot_lab` package in `src/`,
+  unit tests in `tests/` (deterministic, no services), model evals in `evals/`
+  (need Ollama, give a score).
 
 ## Current state (in progress)
 - Open issues, pending decisions, and next steps: `docs/open-issues.md`.
@@ -100,14 +104,17 @@ decision rather than editing an accepted one.
 ## Conventions
 - Match the existing style: classes per component, `task_*` methods as thread
   targets, shared `threading.Event`s passed in through constructors.
-- Put new thread workers in `src/threads/`.
+- Put new thread workers in `src/iot_lab/threads/`.
 - `docs/assistant-flow.md` is a Mermaid flowchart of `route()` / `answer()`.
   Update it in the same commit as any change to that flow.
 - Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
   `REQUIRED_ARGS`, the router prompt, eval cases, and check
   `UNSUPPORTED_PATTERNS` (ADRs 0004-0006).
+- Tests (ADR 0008): deterministic logic gets a unit test in `tests/`; model
+  behaviour gets eval cases in `evals/`. Tests use `tmp_path` for databases
+  and replace `_ollama` with canned replies; never touch `logs/events.db`.
 - The assistant reads the detector's labels from
-  `models/yolo11n_ncnn_model/metadata.yaml`, so run `ncnn_export.py` first.
+  `models/yolo11n_ncnn_model/metadata.yaml`, so run `python -m iot_lab.ncnn_export` first.
 - Secrets live in `certs/` and `.env`. Never read, print, or commit them.
 - `aws-iot-device-sdk-python-v2/` is a vendored, gitignored SDK the code doesn't
   use. Ignore it when searching.

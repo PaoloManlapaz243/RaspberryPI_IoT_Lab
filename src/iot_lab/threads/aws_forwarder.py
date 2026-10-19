@@ -2,8 +2,8 @@ import math
 import threading
 import time
 
-from sqlite_handler import SQLiteHandler
-from aws_publisher import AWSPublisher
+from iot_lab.sqlite_handler import SQLiteHandler
+from iot_lab.aws_publisher import AWSPublisher
 
 #This consumer's name in the consumer_offsets table
 CONSUMER = "aws_iot"

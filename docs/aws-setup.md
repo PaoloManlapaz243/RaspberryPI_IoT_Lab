@@ -96,7 +96,7 @@ Both `.env` and `certs/` are gitignored. Cert filenames are derived from
 
 ## Chat logs (detection assistant, optional)
 
-Used only when `LOG_CHAT_TO_AWS = True` in `src/detection_assistant.py`
+Used only when `LOG_CHAT_TO_AWS = True` in `src/iot_lab/detection_assistant.py`
 ([ADR 0003](adr/0003-detection-assistant.md)).
 
 | Piece | Value |

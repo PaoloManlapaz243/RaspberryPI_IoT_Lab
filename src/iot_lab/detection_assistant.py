@@ -18,7 +18,7 @@ Architecture (docs/adr/0003-detection-assistant.md):
 Run:
   1) ollama serve            (usually already running as a service)
   2) ollama pull <MODEL>     (the MODEL constant below)
-  3) python src/detection_assistant.py
+  3) python -m iot_lab.detection_assistant
 """
 
 import json
@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 # ---------------- config ----------------
 #Paths anchored to this file, like main.py, so it runs from any directory
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH      = PROJECT_ROOT / "logs" / "events.db"   # same file main.py writes to
 
 #The detector's label vocabulary (same exported model main.py loads)
@@ -44,7 +44,7 @@ MODEL        = "gemma2:2b"      # try "qwen2.5:3b" if routing is flaky
 USE_LLM_PHRASING = True         # False = skip 2nd model call, faster but less natural
 
 #Code check for things no function supports -> unclear, before any model call
-#(ADR 0005). Measure without it: python src/eval_assistant.py --no-guard
+#(ADR 0005). Measure without it: python evals/eval_assistant.py --no-guard
 USE_GUARD = True
 
 # chat logging to DynamoDB via MQTT (reuses your IoT cert -- no new credentials).
@@ -508,7 +508,7 @@ def _make_chat_publisher():
     endpoint = os.getenv("AWS_ENDPOINT")
     if not endpoint:
         raise RuntimeError("LOG_CHAT_TO_AWS is True but AWS_ENDPOINT is not set in .env")
-    from aws_publisher import AWSPublisher
+    from iot_lab.aws_publisher import AWSPublisher
     #Missing cert files raise FileNotFoundError here (fail fast on config)
     return AWSPublisher(
         endpoint=endpoint,
