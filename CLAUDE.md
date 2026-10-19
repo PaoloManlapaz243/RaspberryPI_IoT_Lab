@@ -1,8 +1,9 @@
 # IoT Lab — Edge Object Detection
 
 A Raspberry Pi (developed on an x86 laptop) captures USB camera frames, runs
-YOLO11n object detection + tracking, shows an annotated preview window, and
-logs detection events locally and to AWS IoT Core (MQTT → IoT Rule → DynamoDB).
+YOLO11n object detection + tracking, shows an annotated preview window, reads
+a DHT11 temperature/humidity sensor, and logs detection events and sensor
+readings locally and to AWS IoT Core (MQTT → IoT Rule → DynamoDB).
 
 ## Working with me (pair programming)
 - I'm learning the architecture as we build. Before a non-trivial change,
@@ -36,7 +37,7 @@ python -m iot_lab.main          # press 'q' in the preview window to quit
   unless `HEADLESS = True`.
 
 ## Architecture
-Five threads (camera, inference, event writer, AWS forwarder, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/iot_lab/main.py`:
+Up to six threads (camera, inference, event writer, AWS forwarder, DHT sensor, main/GUI) coordinated with `threading.Event`s and a queue, wired together in `src/iot_lab/main.py`:
 
 | Component | File | Role |
 |---|---|---|
@@ -45,8 +46,9 @@ Five threads (camera, inference, event writer, AWS forwarder, main/GUI) coordina
 | `InferenceHandler` | `src/iot_lab/threads/object_detection.py` | Consumer: `model.track(persist=True)` on the latest frame, stores plotted frame, pushes `enter`/`exit` events per track into `queue.Queue` |
 | `GUIHandler` | `src/iot_lab/gui_handler.py` | Draws FPS and shows the plotted frame |
 | `EventWriter` | `src/iot_lab/threads/event_writer.py` | Consumer: drains the queue into SQLite, one insert per event; stops on a `None` sentinel |
-| `SQLiteHandler` | `src/iot_lab/sqlite_handler.py` | Storage only: `events` table, `tracks` view, `consumer_offsets` cursors, WAL mode. Must be created inside the thread that uses it |
-| `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward: reads events after its cursor from SQLite, publishes in batches, advances the cursor only when the whole batch is acked |
+| `SQLiteHandler` | `src/iot_lab/sqlite_handler.py` | Storage only: `events` table, `tracks` view, `readings` table (JSON `payload`), `consumer_offsets` cursors, WAL mode. Must be created inside the thread that uses it |
+| `DHTSensor` | `src/iot_lab/threads/dht_sensor.py` | Producer (if `ENABLE_DHT`): reads the DHT11 every 3 s and writes `readings` rows directly (no queue), waking the forwarder |
+| `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward over streams (detections, readings): each reads rows after its own cursor, publishes in batches, advances the cursor only when the whole batch is acked |
 | `detection_assistant` | `src/iot_lab/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
 | `AWSPublisher` | `src/iot_lab/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
@@ -87,6 +89,9 @@ decision rather than editing an accepted one.
 - `0008-project-layout.md`: installable `iot_lab` package in `src/`,
   unit tests in `tests/` (deterministic, no services), model evals in `evals/`
   (need Ollama, give a score).
+- `0009-sensor-readings.md` (Ben): generic `readings` table (envelope columns +
+  JSON `payload` of measured values), a multi-stream forwarder, and the DHT11
+  as a producer thread in `main.py` that writes directly.
 
 ## Current state (in progress)
 - Open issues, pending decisions, and next steps: `docs/open-issues.md`.
@@ -95,6 +100,9 @@ decision rather than editing an accepted one.
   `sqlite3 logs/events.db "SELECT * FROM tracks"`.
 - Shutdown order in `main.py` matters: producers join first, then the writer
   sentinel, then the forwarder's final upload, then `publisher.close()`.
+- DHT11: `ENABLE_DHT` / `DHT_SENSOR_ID` / `DHT_PIN` in `main.py` (off by default;
+  Pi only, `pip install -e ".[pi]"`). Inspect with
+  `sqlite3 logs/events.db "SELECT * FROM readings ORDER BY id DESC LIMIT 5"`.
 - AWS config: `ENABLE_AWS` / `AWS_CLIENT_ID` in `main.py`, `AWS_ENDPOINT` in
   `.env`, certs in `certs/`. Cloud-side setup: `docs/aws-setup.md`.
 - Check upload progress: `sqlite3 logs/events.db "SELECT * FROM consumer_offsets"`.

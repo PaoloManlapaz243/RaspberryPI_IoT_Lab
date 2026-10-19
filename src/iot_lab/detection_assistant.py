@@ -77,7 +77,7 @@ def _query(sql, params=()):
 
 def _utc_cutoff(since_minutes):
     """ISO UTC string N minutes ago, in the SAME format main.py stores
-    (object_detection.utc_timestamp), so string comparison == time comparison."""
+    (timestamps.utc_timestamp), so string comparison == time comparison."""
     t = datetime.now(timezone.utc) - timedelta(minutes=float(since_minutes))
     return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 

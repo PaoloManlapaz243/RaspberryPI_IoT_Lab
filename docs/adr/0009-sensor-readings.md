@@ -1,7 +1,9 @@
-# ADR 0008: Periodic sensor readings as a second stream
+# ADR 0009: Periodic sensor readings as a second stream
 
 - **Status:** Accepted
-- **Date:** 2026-10-12
+- **Date:** 2026-10-12 (revised 2026-10-19 while porting to the `iot_lab`
+  package: the sensor runs as a thread in `main.py`, not a separate program;
+  see Decision 5)
 - **Extends:** [ADR 0001](0001-event-pipeline.md) (event log) and
   [ADR 0002](0002-store-and-forward.md) (per-consumer cursor over the log).
   The detection `events` table and `tracks` view are unchanged.
@@ -36,7 +38,10 @@ meaning of the detection columns.
    ```
 
    `payload` is a JSON object of the measured values
-   (`{"temperature_c": 24.0, "humidity": 65}`). A new sensor type needs **no
+   (`{"temperature_c": 24.0, "humidity": 65}`), enforced by
+   `CHECK (json_valid(payload) AND json_type(payload) = 'object')`. It holds
+   **measured values only**: derived values (Fahrenheit) are computed when
+   read, so two stored columns can never disagree. A new sensor type needs **no
    schema change** — only a new `sensor_type` and whatever keys it puts in
    `payload`. This is the future-proofing: the shape that varies is quarantined
    inside one TEXT column, while the columns the system queries on
@@ -45,8 +50,11 @@ meaning of the detection columns.
 2. **The forwarder becomes multi-stream.** It drives a list of streams, each
    with its own `consumer_offsets` cursor and its own payload builder, and
    drains them with the same batch/stop-and-wait logic as ADR 0002. Detections
-   are one stream; readings are another. Streams are drained one at a time so
-   the publisher's global ack-wait stays unambiguous.
+   are one stream; readings are another. A stream names its fetch method as a
+   function (`SQLiteHandler.fetch_readings_after`), not a string, so a typo
+   fails at import. Streams are drained one after another; a timed-out batch
+   may still be in flight while the next stream publishes, which is safe
+   because the publisher's ack-wait covers every pending message.
 
 3. **Readings reuse the existing MQTT path** (same publisher, topic, IoT Rule,
    `detections2` table). They are separated in the cloud by `sensor_id` (the
@@ -58,10 +66,22 @@ meaning of the detection columns.
    DynamoDBv2 rule maps each measured value to its own attribute. (SQLite keeps
    the values packed in `payload`; the reading payload builder unpacks them.)
 
-5. **A DHT producer thread** (`src/threads/dht_sensor.py`) reads the sensor
-   every N seconds and pushes reading dicts onto a readings queue, drained into
-   SQLite by a generic queue writer — mirroring the camera → queue → writer
-   path, so slow sensor I/O never blocks anything else.
+5. **The DHT11 runs as a producer thread inside `main.py`**
+   (`src/iot_lab/threads/dht_sensor.py`, `DHTSensor.task_sensor`), enabled by
+   `ENABLE_DHT`. It stops on the shared `stop_event` and is joined with the
+   other producers, so the forwarder's final drain includes its last readings.
+   - **Not a separate program** (the first version): anything that produces
+     data for the device's pipeline belongs in the device's main program. A
+     separate program still needed `main.py` running for its rows to upload,
+     and meant two lifecycles and two shutdowns. The detection assistant is a
+     separate process for the opposite reason: it only reads.
+   - **Writes directly, not through a queue + writer.** The detection queue
+     exists so inference never waits on disk. This loop sleeps seconds between
+     reads, so a ~1 ms insert costs it nothing; it opens its own
+     `SQLiteHandler` in its thread and sets the forwarder's `wakeup`.
+   - **Hardware libraries load only when enabled**, so the laptop never needs
+     them. Enabling it without them fails at startup with install steps
+     (`pip install -e ".[pi]"`).
 
 ## Consequences
 
@@ -70,8 +90,11 @@ meaning of the detection columns.
   more stream descriptor in the forwarder. No change to detections.
 - `readings` and `consumer_offsets` rows for the new consumer are created with
   `CREATE TABLE IF NOT EXISTS` / first-run cursor = 0: no migration.
-- The generic `QueueWriter` replaces the detection-specific `EventWriter`;
-  behavior for detections is identical (same insert, same sentinel shutdown).
+- `EventWriter` is unchanged; it still only handles detections.
+- Existing databases: `CREATE TABLE IF NOT EXISTS` doesn't add the `payload`
+  CHECK to a `readings` table created by the first version. Once its rows are
+  uploaded (the `aws_iot_readings` cursor in `consumer_offsets` has reached the
+  last id), drop that table and let it be recreated.
 - The cloud `detections2` table now holds two row shapes (detections and
   readings). It is schemaless for non-key attributes, so they coexist; tell
   them apart by `sensor_id` or the presence of `sensor_type`.

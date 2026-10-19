@@ -10,16 +10,17 @@ from iot_lab.aws_publisher import AWSPublisher
 class Stream:
     """
     One store-and-forward stream: a SQLite table drained into the cloud under
-    its own cursor (docs/adr/0008-sensor-readings.md). Adding a sensor stream is
+    its own cursor (docs/adr/0009-sensor-readings.md). Adding a sensor stream is
     a new Stream in the list below, not a change to the forward logic.
       consumer   : its row in consumer_offsets (its cursor name)
-      fetch_name : SQLiteHandler method that returns rows after an id
+      fetch      : SQLiteHandler method returning rows after an id, called as
+                   fetch(db, after_id, limit) (e.g. SQLiteHandler.fetch_events_after)
       to_payload : builds the DynamoDB item (incl. idempotent event_key)
     """
 
-    def __init__(self, consumer: str, fetch_name: str, to_payload):
+    def __init__(self, consumer: str, fetch, to_payload):
         self.consumer = consumer
-        self.fetch_name = fetch_name
+        self.fetch = fetch
         self.to_payload = to_payload
         #Per-stream store-and-forward state (set once the DB is open)
         self.cursor = 0
@@ -29,14 +30,16 @@ class Stream:
 class AWSForwarder:
     """
     Store-and-forward consumer (docs/adr/0002-store-and-forward.md), now driving
-    one or more streams (ADR 0008). SQLite is the source of truth. For each
+    one or more streams (ADR 0009). SQLite is the source of truth. For each
     stream this thread reads rows the cloud hasn't acknowledged yet, publishes
     them in batches, and advances that stream's cursor only once the WHOLE batch
     is acknowledged. Delivery is at-least-once; event_key makes re-sends
     idempotent on the cloud side.
 
-    Streams are drained one at a time: the publisher's ack-wait is global, so we
-    never have two streams' batches in flight at once.
+    Streams are drained one after another. A stream whose batch times out
+    leaves it in flight while the next stream publishes; that is still safe,
+    because the publisher's ack-wait is global (it waits for EVERY pending
+    message), so no cursor moves until everything before it is acknowledged.
     """
 
     def __init__(self, db_path: str, publisher: AWSPublisher, streams=None,
@@ -52,8 +55,8 @@ class AWSForwarder:
         #cursor keeps resuming) + sensor readings. A stream with no rows is a
         #no-op, so including readings costs nothing when no sensor is running.
         self.streams = streams if streams is not None else [
-            Stream("aws_iot",          "fetch_events_after",   self.detection_payload),
-            Stream("aws_iot_readings", "fetch_readings_after", self.reading_payload),
+            Stream("aws_iot",          SQLiteHandler.fetch_events_after,   self.detection_payload),
+            Stream("aws_iot_readings", SQLiteHandler.fetch_readings_after, self.reading_payload),
         ]
 
         #Set by the writer(s) after each insert, so new rows go out immediately
@@ -96,8 +99,6 @@ class AWSForwarder:
     def _forward_stream(self, db, stream, deadline):
         #Deliver this stream's backlog batch by batch; advance its cursor only
         #when a whole batch is acked.
-        fetch = getattr(db, stream.fetch_name)
-
         while self.publisher.connected and time.monotonic() < deadline:
 
             #In normal operation, hand over to the final drain as soon as stop() is called
@@ -105,7 +106,7 @@ class AWSForwarder:
                 break
 
             if stream.in_flight_end is None:
-                rows = fetch(stream.cursor, self.batch_size)
+                rows = stream.fetch(db, stream.cursor, self.batch_size)
                 if not rows:
                     break
                 stream.in_flight_end = self._publish_batch(rows, stream.to_payload)
@@ -147,7 +148,7 @@ class AWSForwarder:
     @staticmethod
     def reading_payload(row: dict) -> dict:
         """
-        Reading item (ADR 0008). The measured values are stored packed in the
+        Reading item (ADR 0009). The measured values are stored packed in the
         `payload` JSON column; unpack them to top-level so the DynamoDBv2 rule
         maps each to its own attribute, matching detections' flat shape.
         event_key = "<ts>#<sensor_id>#<sensor_type>" (idempotent re-send key).

@@ -8,7 +8,7 @@ EVENT_COLUMNS = (
     "class_name", "confidence", "x1", "y1", "x2", "y2",
 )
 
-# Columns every sensor reading dict must provide (see docs/adr/0008-sensor-readings.md).
+# Columns every sensor reading dict must provide (see docs/adr/0009-sensor-readings.md).
 # `payload` is a dict of the measured values; it is stored as a JSON string.
 READING_COLUMNS = ("ts", "sensor_id", "sensor_type", "payload")
 
@@ -32,15 +32,17 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_track ON events(sensor_id, run_id, track_id);
 
--- Periodic scalar sensor readings (docs/adr/0008-sensor-readings.md).
+-- Periodic scalar sensor readings (docs/adr/0009-sensor-readings.md).
 -- Generic by design: the per-sensor shape lives in the JSON `payload` column,
 -- so a new sensor type needs no schema change -- only a new sensor_type value.
+-- payload holds measured values only (derived ones, like Fahrenheit, are
+-- computed when read), and must be a JSON object.
 CREATE TABLE IF NOT EXISTS readings (
     id          INTEGER PRIMARY KEY,
     ts          TEXT    NOT NULL,
     sensor_id   TEXT    NOT NULL,
     sensor_type TEXT    NOT NULL,
-    payload     TEXT    NOT NULL
+    payload     TEXT    NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object')
 );
 
 CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings(ts);
@@ -119,7 +121,7 @@ class SQLiteHandler:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    # ---------- sensor readings (ADR 0008) ----------
+    # ---------- sensor readings (ADR 0009) ----------
 
     def insert_reading(self, reading: dict):
         #`payload` arrives as a dict and is stored as a JSON string

@@ -10,9 +10,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from iot_lab.threads.camera import CameraHandler
-from iot_lab.threads.object_detection import InferenceHandler, utc_timestamp
+from iot_lab.threads.object_detection import InferenceHandler
 from iot_lab.threads.event_writer import EventWriter
 from iot_lab.threads.aws_forwarder import AWSForwarder
+from iot_lab.threads.dht_sensor import DHTSensor
+from iot_lab.timestamps import utc_timestamp
 from iot_lab.gui_handler import GUIHandler
 
 
@@ -35,6 +37,12 @@ ENABLE_AWS = True
 AWS_TOPIC = "detections/events"
 AWS_CLIENT_ID = "detector-01"
 CERTS_DIR = PROJECT_ROOT / "certs"
+
+#DHT11 temperature/humidity sensor (docs/adr/0009-sensor-readings.md). Pi
+#only: enabling it without the hardware libraries is a config error.
+ENABLE_DHT = False
+DHT_SENSOR_ID = "T1"    #its own DynamoDB partition, separate from detections
+DHT_PIN = "D4"          #Blinka pin name: GPIO4 (physical pin 7)
 
 #AWS_ENDPOINT lives in .env (kept out of git)
 load_dotenv(PROJECT_ROOT / ".env")
@@ -108,6 +116,16 @@ class RasPiDeploy:
             inserted = self.forwarder.wakeup if self.forwarder else None
         )
 
+        #Initialize DHT sensor (None when disabled). It writes readings to SQLite
+        #itself and wakes the forwarder, like the event writer does
+        self.dht = DHTSensor(
+            self.stop_event,
+            DB_PATH,
+            sensor_id = DHT_SENSOR_ID,
+            pin = DHT_PIN,
+            inserted = self.forwarder.wakeup if self.forwarder else None
+        ) if ENABLE_DHT else None
+
         #Initialize GUI Handler
         self.gui = GUIHandler(
             self.inference_frame_ready,
@@ -152,6 +170,10 @@ class RasPiDeploy:
 
         self.t_camera.start()
         self.t_inference.start()
+
+        if self.dht:
+            self.t_dht = threading.Thread(target = self.dht.task_sensor, daemon = True)
+            self.t_dht.start()
 
         #Display message that the program was able to start tasks
         print(f"Program Starting (run_id {self.run_id}). Press 'q' (or Ctrl+C) to quit.")
@@ -199,6 +221,8 @@ class RasPiDeploy:
         self.stop_event.set()
         self.t_camera.join()
         self.t_inference.join()
+        if self.dht:
+            self.t_dht.join()
 
         #2. only now queue the sentinel, so those final exits are written first
         self.event_writer.stop()

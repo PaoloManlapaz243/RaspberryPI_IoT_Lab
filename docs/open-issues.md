@@ -70,13 +70,26 @@ Living list of known problems, pending decisions, and next steps. Last updated
 
 ## AWS
 
-16. **DynamoDB table pending** (group mate). The spec is in
-    `docs/aws-setup.md`: partition key `sensor_id`, sort key `event_key`.
-    The broker has acknowledged uploads, but items landing in DynamoDB isn't
-    verified.
+16. **DynamoDB table: verify.** Ben's ADR 0009 says detections and readings
+    go to `detections2`, so the table likely exists now. Confirm items for
+    both `S1` (detections) and `T1` (readings) land there, then remove this item.
+    The spec is in `docs/aws-setup.md`: partition key `sensor_id`, sort key `event_key`.
 17. **Chat logs** need their own table, rule, and policy (`chat/logs`, client
     `assistant-dev`). `LOG_CHAT_TO_AWS = False` until then. The chat
     `timestamp` is local time, unlike events (UTC).
+
+## DHT11 sensor (ADR 0009)
+
+20. **Not yet run on the Pi as a thread.** Ben's separate-program version was
+    written on the Pi. The thread version is tested only with a fake device. On the Pi:
+    `pip install -e ".[pi]"`, set `ENABLE_DHT = True`, and check that
+    `readings` fills every ~3 s and uploads, and that 'q' shuts down cleanly.
+    The device object is created on the main thread and read on the sensor
+    thread; confirm that works with the lgpio backend.
+21. **An existing Pi database** may have the first version's `readings` table
+    without the JSON check. Once it's uploaded, drop it (see ADR 0009).
+22. **The assistant can't answer temperature questions yet.** That needs a
+    new function over `readings` (ADRs 0004–0007 checklist).
 
 ## Housekeeping
 
