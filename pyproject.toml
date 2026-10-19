@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iot-lab"
+version = "0.1.0"
+description = "Edge object detection with SQLite event logging, AWS IoT upload, and a local Q&A assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "ultralytics",
+    "opencv-python",
+    "ncnn",
+    "numpy",
+    "paho-mqtt>=2",
+    "python-dotenv",
+    "pyyaml",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+#The vendored AWS SDK ships its own tests; never collect them
+norecursedirs = [".*", "*.egg-info", "aws-iot-device-sdk-python-v2"]

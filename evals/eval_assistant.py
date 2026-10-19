@@ -7,11 +7,11 @@ the call it produces against the expected one. Use the score to compare prompt
 changes or models, instead of judging by feel.
 
 Run (Ollama must be running):
-  python src/eval_assistant.py                       # tuning set, MODEL from detection_assistant
-  python src/eval_assistant.py llama3.2:1b           # try another model
-  python src/eval_assistant.py --held-out            # held-out set (see below)
-  python src/eval_assistant.py --verbose             # print passing cases too
-  python src/eval_assistant.py --no-guard            # measure without the code guard (ADR 0005)
+  python evals/eval_assistant.py                       # tuning set, MODEL from detection_assistant
+  python evals/eval_assistant.py llama3.2:1b           # try another model
+  python evals/eval_assistant.py --held-out            # held-out set (see below)
+  python evals/eval_assistant.py --verbose             # print passing cases too
+  python evals/eval_assistant.py --no-guard            # measure without the code guard (ADR 0005)
 
 Two sets:
   CASES     the tuning set. Prompt changes are made while looking at these
@@ -31,7 +31,7 @@ import sys
 import time
 from collections import Counter
 
-import detection_assistant as da
+from iot_lab import detection_assistant as da
 
 ANY = object()   #expected arg value: any value is fine, as long as it's valid
 

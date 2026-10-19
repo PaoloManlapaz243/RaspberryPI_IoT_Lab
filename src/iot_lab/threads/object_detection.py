@@ -4,7 +4,7 @@ import time
 import numpy as np
 from ultralytics import YOLO
 
-from threads.camera import CameraHandler
+from iot_lab.threads.camera import CameraHandler
 
 from datetime import datetime, timezone
 

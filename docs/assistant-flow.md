@@ -1,6 +1,6 @@
 # Detection Assistant: Question to Reply
 
-How `src/detection_assistant.py` turns a typed question into a printed reply.
+How `src/iot_lab/detection_assistant.py` turns a typed question into a printed reply.
 The decisions behind each step are in ADRs
 [0003](adr/0003-detection-assistant.md) (separate read-only process, the model
 routes and phrases),

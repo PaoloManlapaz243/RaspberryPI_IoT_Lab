@@ -2,7 +2,7 @@ import queue
 import threading
 import sqlite3
 
-from sqlite_handler import SQLiteHandler
+from iot_lab.sqlite_handler import SQLiteHandler
 
 #Sentinel ("poison pill"): once the writer dequeues this, it closes and returns
 STOP = None

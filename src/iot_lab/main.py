@@ -3,23 +3,23 @@ import time
 import threading
 import cv2
 from ultralytics import YOLO
-from aws_publisher import AWSPublisher
+from iot_lab.aws_publisher import AWSPublisher
 
 import queue
 from pathlib import Path
 from dotenv import load_dotenv
 
-from threads.camera import CameraHandler
-from threads.object_detection import InferenceHandler, utc_timestamp
-from threads.event_writer import EventWriter
-from threads.aws_forwarder import AWSForwarder
-from gui_handler import GUIHandler
+from iot_lab.threads.camera import CameraHandler
+from iot_lab.threads.object_detection import InferenceHandler, utc_timestamp
+from iot_lab.threads.event_writer import EventWriter
+from iot_lab.threads.aws_forwarder import AWSForwarder
+from iot_lab.gui_handler import GUIHandler
 
 
 
 #Paths are anchored to this file, not the current directory, so the program
 #works no matter where it is launched from
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = str(PROJECT_ROOT / "models" / "yolo11n_ncnn_model")
 
 #SQLite event log

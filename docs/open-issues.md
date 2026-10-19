@@ -46,7 +46,7 @@ Living list of known problems, pending decisions, and next steps. Last updated
    because of this. Idea: check that the number from the data appears in
    the sentence.
 8. **"today" means the last 24 hours**, not since midnight.
-9. **Not measured on the Pi.** Run `python src/eval_assistant.py --held-out` on
+9. **Not measured on the Pi.** Run `python evals/eval_assistant.py --held-out` on
    the Pi with `main.py` running (latency and accuracy under YOLO load). Ollama
    and gemma2:2b must be installed there.
 
@@ -54,7 +54,7 @@ Living list of known problems, pending decisions, and next steps. Last updated
 
 10. **Tracker overcount.** Each time the tracker loses a person, they count as
     a new visit (e.g. "77 people"). `EXIT_TIMEOUT_S = 2.0` in
-    `src/threads/object_detection.py` is untuned. This is the most visible
+    `src/iot_lab/threads/object_detection.py` is untuned. This is the most visible
     accuracy problem in the assistant's answers.
 11. **Exits only fire while frames arrive.** `_sweep_exits()` runs once per
     inference frame, so if the camera stalls, exits wait until shutdown (their
@@ -65,10 +65,8 @@ Living list of known problems, pending decisions, and next steps. Last updated
 13. **Stale "present" after a crash.** If `main.py` dies without 'q' or Ctrl+C,
     the last visits never get exits, and `present_now()` shows them until the
     next run starts.
-14. **`CameraHandler` calls `exit()` in its constructor** (`src/threads/camera.py`);
+14. **`CameraHandler` calls `exit()` in its constructor** (`src/iot_lab/threads/camera.py`);
     it should raise. Also, width/height defaults are portrait (480×640).
-15. **`ncnn_export.py` uses paths relative to `src/`** (`../models/yolo11n.pt`).
-    Anchor them to the file like `main.py` does.
 
 ## AWS
 
@@ -83,7 +81,7 @@ Living list of known problems, pending decisions, and next steps. Last updated
 ## Housekeeping
 
 18. **Commented-out old `AWSPublisher` class** at the top of
-    `src/aws_publisher.py` (~47 lines). Delete it; git history keeps it.
+    `src/iot_lab/aws_publisher.py` (~47 lines). Delete it; git history keeps it.
 19. **Stray `~/Desktop/models/`** outside the repo (an old relative-path
     export). Unused; delete after checking nothing needs it.
 
