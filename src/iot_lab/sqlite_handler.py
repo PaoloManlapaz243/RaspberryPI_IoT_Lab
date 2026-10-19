@@ -1,11 +1,16 @@
+import json
 import sqlite3
 from pathlib import Path
 
-# Columns every event dict must provide (see docs/adr/0001-event-pipeline.md)
+# Columns every detection event dict must provide (see docs/adr/0001-event-pipeline.md)
 EVENT_COLUMNS = (
     "ts", "sensor_id", "run_id", "track_id", "event_type",
     "class_name", "confidence", "x1", "y1", "x2", "y2",
 )
+
+# Columns every sensor reading dict must provide (see docs/adr/0008-sensor-readings.md).
+# `payload` is a dict of the measured values; it is stored as a JSON string.
+READING_COLUMNS = ("ts", "sensor_id", "sensor_type", "payload")
 
 #Wrapped in one transaction: the writer and forwarder threads both open the DB
 #at startup, and interleaved DROP/CREATE VIEW statements would otherwise fail
@@ -26,6 +31,20 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_track ON events(sensor_id, run_id, track_id);
+
+-- Periodic scalar sensor readings (docs/adr/0008-sensor-readings.md).
+-- Generic by design: the per-sensor shape lives in the JSON `payload` column,
+-- so a new sensor type needs no schema change -- only a new sensor_type value.
+CREATE TABLE IF NOT EXISTS readings (
+    id          INTEGER PRIMARY KEY,
+    ts          TEXT    NOT NULL,
+    sensor_id   TEXT    NOT NULL,
+    sensor_type TEXT    NOT NULL,
+    payload     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings(ts);
+CREATE INDEX IF NOT EXISTS idx_readings_sensor ON readings(sensor_id, sensor_type);
 
 -- Views hold no data, so always recreate them to match this code
 DROP VIEW IF EXISTS tracks;
@@ -74,10 +93,12 @@ class SQLiteHandler:
         #Safe with WAL; skips an fsync per commit (matters on an SD card)
         self.conn.execute("PRAGMA synchronous=NORMAL")
 
-        #Rows come back as sqlite3.Row, so fetch_events_after() can build dicts
+        #Rows come back as sqlite3.Row, so fetch_*_after() can build dicts
         self.conn.row_factory = sqlite3.Row
 
         self.conn.executescript(SCHEMA)
+
+    # ---------- detection events ----------
 
     def insert_event(self, event: dict):
         #Commit per event so readers see it immediately (no batching)
@@ -97,6 +118,34 @@ class SQLiteHandler:
             (last_event_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    # ---------- sensor readings (ADR 0008) ----------
+
+    def insert_reading(self, reading: dict):
+        #`payload` arrives as a dict and is stored as a JSON string
+        values = (
+            reading["ts"],
+            reading["sensor_id"],
+            reading["sensor_type"],
+            json.dumps(reading["payload"]),
+        )
+        self.conn.execute(
+            f"INSERT INTO readings ({', '.join(READING_COLUMNS)}) VALUES (?, ?, ?, ?)",
+            values,
+        )
+        self.conn.commit()
+
+    def fetch_readings_after(self, last_event_id: int, limit: int) -> list[dict]:
+        #Mirrors fetch_events_after. payload is returned as the raw JSON string;
+        #the forwarder's reading payload builder unpacks it.
+        rows = self.conn.execute(
+            f"SELECT id, {', '.join(READING_COLUMNS)} FROM readings "
+            "WHERE id > ? ORDER BY id LIMIT ?",
+            (last_event_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------- store-and-forward cursors ----------
 
     def get_offset(self, consumer: str) -> int:
         #0 = nothing delivered yet (SQLite ids start at 1)
