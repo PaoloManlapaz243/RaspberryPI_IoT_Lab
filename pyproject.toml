@@ -20,6 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+#DHT11 sensor (Raspberry Pi only; also needs: sudo apt install swig python3-dev liblgpio-dev)
+pi = ["adafruit-circuitpython-dht"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

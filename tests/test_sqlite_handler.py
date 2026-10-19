@@ -1,4 +1,7 @@
 """SQLiteHandler storage: the tracks view and consumer cursors (ADRs 0001, 0002)."""
+import json
+import sqlite3
+
 import pytest
 
 from iot_lab.sqlite_handler import SQLiteHandler
@@ -48,3 +51,20 @@ def test_fetch_events_after_is_oldest_first_and_limited(db):
         db.insert_event(event(i, "enter", f"t{i}"))
     rows = db.fetch_events_after(2, limit=2)
     assert [row["id"] for row in rows] == [3, 4]
+
+def reading(ts, temperature_c=21.5):
+    return {"ts": ts, "sensor_id": "T1", "sensor_type": "dht11",
+            "payload": {"temperature_c": temperature_c, "humidity": 40}}
+
+def test_readings_round_trip_with_payload_as_json(db):
+    db.insert_reading(reading("t1"))
+    db.insert_reading(reading("t2", 22.0))
+    rows = db.fetch_readings_after(1, limit=10)
+    assert [row["id"] for row in rows] == [2]
+    assert json.loads(rows[0]["payload"]) == {"temperature_c": 22.0, "humidity": 40}
+
+@pytest.mark.parametrize("payload", ["not json", "[1, 2]", "21.5"])
+def test_readings_payload_must_be_a_json_object(db, payload):
+    with pytest.raises(sqlite3.IntegrityError):
+        db.conn.execute("INSERT INTO readings (ts, sensor_id, sensor_type, payload) "
+                        "VALUES ('t1', 'T1', 'dht11', ?)", (payload,))

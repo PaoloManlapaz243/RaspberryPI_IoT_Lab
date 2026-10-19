@@ -5,17 +5,11 @@ import numpy as np
 from ultralytics import YOLO
 
 from iot_lab.threads.camera import CameraHandler
-
-from datetime import datetime, timezone
+from iot_lab.timestamps import utc_timestamp
 
 #Seconds a track can go unseen before we emit its exit event.
 #Too short: tracker flicker creates false exit/enter pairs. Too long: late exits.
 EXIT_TIMEOUT_S = 2.0
-
-
-def utc_timestamp():
-    #ISO 8601 UTC with milliseconds, e.g. 2026-09-28T04:38:15.123Z
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class InferenceHandler():
