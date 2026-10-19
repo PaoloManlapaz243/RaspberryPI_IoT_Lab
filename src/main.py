@@ -3,23 +3,26 @@ import time
 import threading
 import cv2
 from ultralytics import YOLO
-from aws_publisher import AWSPublisher
+from iot_lab.aws_publisher import AWSPublisher
 
 import queue
 from pathlib import Path
 from dotenv import load_dotenv
 
-from threads.camera import CameraHandler
-from threads.object_detection import InferenceHandler, utc_timestamp
-from threads.event_writer import EventWriter
-from threads.aws_forwarder import AWSForwarder
-from gui_handler import GUIHandler
+from iot_lab.threads.camera import CameraHandler
+from iot_lab.threads.object_detection import InferenceHandler
+from iot_lab.threads.event_writer import EventWriter
+from iot_lab.threads.aws_forwarder import AWSForwarder
+from iot_lab.threads.dht_sensor import DHTSensor
+from iot_lab.threads.mqtt_bridge import MQTTBridge
+from iot_lab.timestamps import utc_timestamp
+from iot_lab.gui_handler import GUIHandler
 
 
 
 #Paths are anchored to this file, not the current directory, so the program
 #works no matter where it is launched from
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = str(PROJECT_ROOT / "models" / "yolo11n_ncnn_model")
 
 #SQLite event log
@@ -35,6 +38,20 @@ ENABLE_AWS = True
 AWS_TOPIC = "detections/events"
 AWS_CLIENT_ID = "detector-01"
 CERTS_DIR = PROJECT_ROOT / "certs"
+
+#DHT11 temperature/humidity sensor (docs/adr/0009-sensor-readings.md). Pi
+#only: enabling it without the hardware libraries is a config error.
+ENABLE_DHT = False
+DHT_SENSOR_ID = "T1"    #its own DynamoDB partition, separate from detections
+DHT_PIN = "D4"          #Blinka pin name: GPIO4 (physical pin 7)
+
+#Networked sensors over MQTT (docs/adr/0010-mqtt-sensor-ingest.md). A local
+#Mosquitto broker on the Pi receives sensor messages (e.g. from an ESP32) and
+#this bridge writes them to the readings table. Pi-side only; needs the broker.
+ENABLE_MQTT = False
+MQTT_HOST = "localhost"
+MQTT_PORT = 1883
+MQTT_TOPIC = "sensors/+"   #one level under sensors/: sensors/esp32, sensors/...
 
 #AWS_ENDPOINT lives in .env (kept out of git)
 load_dotenv(PROJECT_ROOT / ".env")
@@ -108,6 +125,28 @@ class RasPiDeploy:
             inserted = self.forwarder.wakeup if self.forwarder else None
         )
 
+        #Initialize DHT sensor (None when disabled). It writes readings to SQLite
+        #itself and wakes the forwarder, like the event writer does
+        self.dht = DHTSensor(
+            self.stop_event,
+            DB_PATH,
+            sensor_id = DHT_SENSOR_ID,
+            pin = DHT_PIN,
+            inserted = self.forwarder.wakeup if self.forwarder else None
+        ) if ENABLE_DHT else None
+
+        #Initialize MQTT bridge (None when disabled). Mirrors the DHT sensor:
+        #its own thread + SQLiteHandler, writes readings, wakes the forwarder
+        self.mqtt = MQTTBridge(
+            self.stop_event,
+            DB_PATH,
+            host = MQTT_HOST,
+            port = MQTT_PORT,
+            topic = MQTT_TOPIC,
+        ) if ENABLE_MQTT else None
+        if self.mqtt:
+            self.mqtt.inserted = self.forwarder.wakeup if self.forwarder else None
+
         #Initialize GUI Handler
         self.gui = GUIHandler(
             self.inference_frame_ready,
@@ -152,6 +191,14 @@ class RasPiDeploy:
 
         self.t_camera.start()
         self.t_inference.start()
+
+        if self.dht:
+            self.t_dht = threading.Thread(target = self.dht.task_sensor, daemon = True)
+            self.t_dht.start()
+
+        if self.mqtt:
+            self.t_mqtt = threading.Thread(target = self.mqtt.task_bridge, daemon = True)
+            self.t_mqtt.start()
 
         #Display message that the program was able to start tasks
         print(f"Program Starting (run_id {self.run_id}). Press 'q' (or Ctrl+C) to quit.")
@@ -199,6 +246,10 @@ class RasPiDeploy:
         self.stop_event.set()
         self.t_camera.join()
         self.t_inference.join()
+        if self.dht:
+            self.t_dht.join()
+        if self.mqtt:
+            self.t_mqtt.join()
 
         #2. only now queue the sentinel, so those final exits are written first
         self.event_writer.stop()
