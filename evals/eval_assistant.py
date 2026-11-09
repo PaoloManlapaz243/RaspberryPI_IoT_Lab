@@ -108,6 +108,12 @@ CASES = [
     ("is anyone wearing a hat?",                      "unclear",          {}),
     ("how many kitchen utensils were seen?",          "unclear",          {}),
     ("how many sports items showed up?",              "unclear",          {}),
+    # --- docs: how-to / design questions about the system (ADR 0010)
+    ("how do I wire the DHT11 to the Pi?",            "docs",             {}),
+    ("why does the upload use a cursor over SQLite?", "docs",             {}),
+    ("what topic does the ESP32 publish to?",         "docs",             {}),
+    ("how do I set up the DynamoDB table?",           "docs",             {}),
+    ("why is the assistant a separate process?",      "docs",             {}),
     # --- off-topic
     ("what's the weather like?",                      "unknown",          {}),
     ("tell me a joke",                                "unknown",          {}),
@@ -171,6 +177,14 @@ HELD_OUT = [
     #More categories
     ("how many pets came by today?",                    "unclear",          {}),
     ("how much wildlife was spotted?",                  "unclear",          {}),
+    #Added 2026-11-09 before any run, for the docs intent (ADR 0010).
+    #How-to/design questions answered from the project docs:
+    ("which GPIO pin does the temperature sensor use?",  "docs",             {}),
+    ("what happens to detections when the wifi drops?",  "docs",             {}),
+    ("what is the event_key field for?",                 "docs",             {}),
+    ("why did we pick SQLite over a cloud database?",    "docs",             {}),
+    #Near-misses: about the system's data, not its docs
+    ("what objects is the camera seeing at the moment?", "present_now",      {}),
 ]
 
 

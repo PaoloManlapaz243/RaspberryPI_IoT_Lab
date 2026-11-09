@@ -25,6 +25,10 @@ python -m iot_lab.main          # press 'q' in the preview window to quit
 - Python 3.12 venv in `.venv/`. Imports are absolute (`from iot_lab.threads.camera import ...`).
 - `python -m iot_lab.detection_assistant` runs the Ollama Q&A assistant as a
   separate process (needs Ollama + the `MODEL` it names).
+- How-to questions go to the `docs` intent (RAG, ADR 0010). One-time setup:
+  `pip install -e ".[rag]"`, `ollama pull nomic-embed-text`, then
+  `python -m iot_lab.rag build` (re-run after editing docs; the index is
+  `logs/chroma/`, gitignored).
 - `python evals/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
   scores the assistant's routing (accuracy, misroutes to chat, retries,
   latency). Run it before and after any prompt or model change; never tune
@@ -50,6 +54,7 @@ Up to six threads (camera, inference, event writer, AWS forwarder, DHT sensor, m
 | `DHTSensor` | `src/iot_lab/threads/dht_sensor.py` | Producer (if `ENABLE_DHT`): reads the DHT11 every 3 s and writes `readings` rows directly (no queue), waking the forwarder |
 | `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward over streams (detections, readings): each reads rows after its own cursor, publishes in batches, advances the cursor only when the whole batch is acked |
 | `detection_assistant` | `src/iot_lab/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
+| `rag` | `src/iot_lab/rag.py` | Doc retrieval for the assistant's `docs` intent: chunks README/CLAUDE.md/`docs/**`, embeds with `nomic-embed-text`, stores in ChromaDB, `retrieve()` returns the nearest passages |
 | `AWSPublisher` | `src/iot_lab/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
 Key design points:
@@ -92,6 +97,9 @@ decision rather than editing an accepted one.
 - `0009-sensor-readings.md` (Ben): generic `readings` table (envelope columns +
   JSON `payload` of measured values), a multi-stream forwarder, and the DHT11
   as a producer thread in `main.py` that writes directly.
+- `0010-doc-retrieval.md`: RAG for how-to questions. A `docs` router intent;
+  code retrieves passages (local ChromaDB + Ollama `nomic-embed-text`), the
+  model answers only from them, with a file citation.
 
 ## Current state (in progress)
 - Open issues, pending decisions, and next steps: `docs/open-issues.md`.

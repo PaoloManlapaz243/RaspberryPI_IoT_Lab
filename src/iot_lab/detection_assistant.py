@@ -31,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
+from iot_lab import rag
+
 # ---------------- config ----------------
 #Paths anchored to this file, like main.py, so it runs from any directory
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -220,13 +222,18 @@ Functions (name: args):
 - most_common: since_minutes. Which labels visit MOST OFTEN ("top", "most", "usually").
 - last_seen: label. WHEN a specific named object was last seen.
 - labels_available: no args. Which label NAMES have ever been seen (a list, not counts).
+- docs: no args. A how-to, setup, or design question about THIS SYSTEM itself -- its
+  sensors, wiring, MQTT, AWS, the data pipeline, or why it was built a certain way --
+  answered from the project's documentation, not the live data. ("where should the
+  temperature sensor go", "how does store-and-forward work", "what is event_key for").
 - unclear: no args. The question IS about the camera, people, or objects, but no
   function above answers it exactly. Use unclear when it needs:
     * a clock time or a day ("at 5pm", "since noon", "this morning", "yesterday")
     * several labels or a category ("cats and dogs", "vehicles", "animals")
     * how long something stayed, or what something looked like (color, clothing)
 - unknown: no args. ONLY for questions with nothing to do with the camera, people,
-  objects, or the room (weather, math, jokes, greetings, general knowledge).
+  objects, the room, or how this system works (weather, math, jokes, greetings,
+  general knowledge). A question about the system's setup or design is docs, not unknown.
 
 Rules:
 - label must be ONE of the detector's labels: {LABELS}.
@@ -252,6 +259,10 @@ Q: anything in front of the camera?
 A: {"function": "present_now", "args": {}}
 Q: how many buses came by after lunch?
 A: {"function": "unclear", "args": {}}
+Q: where should we mount the temperature sensor?
+A: {"function": "docs", "args": {}}
+Q: how does the store-and-forward upload survive an outage?
+A: {"function": "docs", "args": {}}
 Q: what's the capital of France?
 A: {"function": "unknown", "args": {}}
 """.replace("{LABELS}", ", ".join(sorted(DETECTOR_LABELS)))
@@ -265,15 +276,18 @@ ALLOWED_ARGS = {
     "most_common": {"since_minutes"},
     "last_seen": {"label"},
     "labels_available": set(),
+    "docs": set(),
     "unclear": set(),
     "unknown": set(),
 }
 #Args that must be present (non-null). Missing -> rejected, so the model retries
 REQUIRED_ARGS = {"last_seen": {"label"}}
 
-#Intents that aren't functions: unclear (about detections, no function fits ->
-#ask to rephrase) and unknown (off-topic). Neither ever reads the DB.
-NON_FUNCTION_INTENTS = ["unclear", "unknown"]
+#Intents that aren't detection functions: docs (a how-to/design question,
+#answered from the project docs via RAG -> answer() handles it), unclear (about
+#detections, no function fits), and unknown (off-topic). None reads the
+#detection DB; docs reads the separate doc index (docs/adr/0010-doc-retrieval.md).
+NON_FUNCTION_INTENTS = ["docs", "unclear", "unknown"]
 
 #Fail at startup if a function is added to FUNCTIONS without its args here
 assert set(ALLOWED_ARGS) == set(FUNCTIONS) | set(NON_FUNCTION_INTENTS), "ALLOWED_ARGS out of sync with FUNCTIONS"
@@ -481,12 +495,32 @@ def phrase(question, result):
         temperature=0.2,
     ).strip()
 
+PHRASE_DOCS_SYSTEM = """Answer the question in 1-3 short sentences using ONLY the provided
+passages. After a sentence, cite the file it came from in square brackets, e.g.
+[docs/adr/0002-store-and-forward.md]. If the passages do not answer the question, say you
+couldn't find it in the project docs."""
+
+def phrase_docs(question, result):
+    #Answer a how-to question from retrieved passages, with a citation (RAG).
+    context = "\n\n".join(f"[{p['source']}]\n{p['text']}" for p in result["passages"])
+    return _ollama(
+        [{"role": "system", "content": PHRASE_DOCS_SYSTEM},
+         {"role": "user", "content": f"Question: {question}\n\nPassages:\n{context}"}],
+        temperature=0.2,
+    ).strip()
+
 def answer(question):
     call = route(question)
     if call["function"] == "unknown":
-        return ("I can only answer questions about detections: what's in view now, counts, "
-                "recent visits, the most common label, when something was last seen, "
-                "or which labels I track.")
+        return ("I can only answer questions about detections (what's in view now, counts, "
+                "recent visits, the most common label, when something was last seen, which "
+                "labels I track) or how this system works.")
+    if call["function"] == "docs":
+        result = rag.retrieve(question)
+        if not result.get("passages"):
+            note = f" ({result['error']})" if result.get("error") else ""
+            return f"I couldn't find anything about that in the project docs{note}."
+        return phrase_docs(question, result)
     if call["function"] == "unclear":
         return ("I can't answer that exactly from the detection log. I can count or find "
                 "one kind of object at a time, over a recent window like 'the last hour' "

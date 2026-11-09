@@ -1,7 +1,7 @@
 # Open Issues
 
 Living list of known problems, pending decisions, and next steps. Last updated
-2026-10-08. Remove an item in the same commit that resolves it.
+2026-11-09. Remove an item in the same commit that resolves it.
 
 ## Current state (2026-10-08)
 
@@ -49,6 +49,15 @@ Living list of known problems, pending decisions, and next steps. Last updated
 9. **Not measured on the Pi.** Run `python evals/eval_assistant.py --held-out` on
    the Pi with `main.py` running (latency and accuracy under YOLO load). Ollama
    and gemma2:2b must be installed there.
+23. **Guard declines some docs questions.** The code guard runs before
+    routing and is tuned for the detection log, so a how-to question with
+    "how long"/"duration" or a clock time ("how long does the forwarder
+    wait?") is declined as `unclear` instead of reaching `docs` (ADR 0010).
+    Fix idea: narrow the guard per intent.
+24. **Docs eval cases not yet run.** 5 tuning + 4 held-out cases for the
+    `docs` intent (plus one held-out near-miss) were added before any run. Run the eval and record the
+    numbers here; check whether existing questions (e.g. "what kinds of
+    things can you detect?") now misroute to `docs`.
 
 ## Detector pipeline
 

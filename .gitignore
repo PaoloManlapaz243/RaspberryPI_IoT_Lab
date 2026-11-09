@@ -17,3 +17,4 @@ start.sh
 __pycache__
 aws-iot-device-sdk-python-v2/
 *.egg-info/
+logs/chroma/

@@ -64,6 +64,16 @@ python -m iot_lab.detection_assistant
 Try: "is anyone there?", "how many people came by in the last hour?",
 "when did you last see a dog?"
 
+To also answer how-to questions about the system from its docs ("where should
+the temperature sensor go?"), build the doc index once (and again after editing
+docs):
+
+```shell
+pip install -e ".[rag]"
+ollama pull nomic-embed-text
+python -m iot_lab.rag build
+```
+
 How a question becomes a reply: [`docs/assistant-flow.md`](docs/assistant-flow.md).
 
 ## 6. Tests and evals
