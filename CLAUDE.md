@@ -33,6 +33,10 @@ python -m iot_lab.main          # press 'q' in the preview window to quit
   assistant: it chains tools for multi-part questions. `pip install -e ".[agent]"`.
   `python evals/eval_agent.py [model] [--held-out] [--verbose]` scores its tool
   choice (same two-set rule as the assistant eval).
+- The agent's `set_cooling` tool publishes to `commands/esp32` on the local
+  Mosquitto broker (ADR 0012), only when the user's own words ask for it.
+  Every attempt is logged to `logs/commands.jsonl` (gitignored). The ESP32
+  sketch is `ESP/esp32_mqtt/esp32_mqtt.ino`.
 - `python evals/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
   scores the assistant's routing (accuracy, misroutes to chat, retries,
   latency). Run it before and after any prompt or model change; never tune
@@ -59,6 +63,7 @@ Up to six threads (camera, inference, event writer, AWS forwarder, DHT sensor, m
 | `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward over streams (detections, readings): each reads rows after its own cursor, publishes in batches, advances the cursor only when the whole batch is acked |
 | `detection_assistant` | `src/iot_lab/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
 | `agent` | `src/iot_lab/agent.py` | **Separate process**, alongside the assistant. LangGraph state machine (guard → plan → check → act → … → respond) over the assistant's functions, `rag.retrieve` and `latest_reading` as tools; bounded steps, hard allow-list |
+| `commands` | `src/iot_lab/commands.py` | The only code that publishes a command: `issue()` = guard (allow-list + the user explicitly asked) → log → publish to `commands/esp32` → wait for the ESP32's ack |
 | `rag` | `src/iot_lab/rag.py` | Doc retrieval for the assistant's `docs` intent: chunks README/CLAUDE.md/`docs/**`, embeds with `nomic-embed-text`, stores in ChromaDB, `retrieve()` returns the nearest passages |
 | `AWSPublisher` | `src/iot_lab/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
@@ -109,6 +114,10 @@ decision rather than editing an accepted one.
   graph with a JSON-schema planner (gemma2:2b has no native tool calling), a
   `check` safety node (allow-list, `validate_call`, per-tool guard, dedupe),
   bounded steps, tool output passed as escaped `<data>`.
+- `0012-command-and-control.md`: agent → MQTT `commands/esp32` → ESP32 relay.
+  The guard sits next to the publish (`commands.issue()`); only the user's own
+  words authorize a command, never the model or tool output. Device re-checks,
+  boots off, auto-off failsafe; acks on `sensors/esp32/ack`.
 
 ## Current state (in progress)
 - Open issues, pending decisions, and next steps: `docs/open-issues.md`.
@@ -142,6 +151,9 @@ decision rather than editing an accepted one.
   and replace `_ollama` with canned replies; never touch `logs/events.db`.
 - The assistant reads the detector's labels from
   `models/yolo11n_ncnn_model/metadata.yaml`, so run `python -m iot_lab.ncnn_export` first.
+- Adding an actuator: an `ACTUATORS` + `ACTUATOR_WORDS` entry in
+  `commands.py`, a tool in the agent's `TOOL_ARGS` / `COMMAND_TOOLS`, the same
+  allow-list in the ESP32 sketch, guard tests, and eval cases (ADR 0012).
 - Secrets live in `certs/` and `.env`. Never read, print, or commit them.
 - `aws-iot-device-sdk-python-v2/` is a vendored, gitignored SDK the code doesn't
   use. Ignore it when searching.

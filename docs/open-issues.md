@@ -85,6 +85,23 @@ Living list of known problems, pending decisions, and next steps. Last updated
 14. **`CameraHandler` calls `exit()` in its constructor** (`src/iot_lab/threads/camera.py`);
     it should raise. Also, width/height defaults are portrait (480×640).
 
+## ESP32 commands (ADR 0012)
+
+27. **Sketch not compiled yet.** `ESP/esp32_mqtt/esp32_mqtt.ino` (commands +
+    ack + failsafe) was written without a toolchain. Compile and flash it in
+    the Arduino IDE (ESP32 core, PubSubClient, ArduinoJson **v6**), then demo:
+    `python -m iot_lab.agent` → "turn the fan on" → onboard LED on, reply
+    says "confirmed by the ESP32".
+28. **Open broker.** Mosquitto is anonymous on `PiNet`, so any hotspot client
+    can publish to `commands/esp32` and skip the agent's guard. Fine for the
+    demo; beyond it, add broker auth + an ACL (only `agent-commands` may
+    publish `commands/#`).
+29. **ADR numbering vs `feat/esp_mqtt`.** Ben's branch has its MQTT ingest ADR
+    as `0010` and the old (pre-package) layout. When it's rebased: renumber
+    it (0013), move `mqtt_bridge.py` to `src/iot_lab/threads/`, and keep this
+    branch's `esp32_mqtt.ino` (a superset of his: it adds commands and a
+    `cooling_on` field).
+
 ## AWS
 
 16. **DynamoDB table: verify.** Ben's ADR 0009 says detections and readings
@@ -122,4 +139,5 @@ Living list of known problems, pending decisions, and next steps. Last updated
 2. #10 tracker tuning: it affects every count the assistant reports.
 3. #9 Pi measurement.
 4. Off-topic chat feature (once #1 is settled).
-5. Run and record `eval_agent.py` (#25).
+5. Run and record `eval_agent.py` (#25); flash and demo the ESP32 (#27).
+6. Merge `feat/esp_mqtt` (#29) so ESP32 readings reach `latest_reading`.

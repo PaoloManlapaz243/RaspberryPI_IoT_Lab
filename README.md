@@ -87,6 +87,19 @@ pip install -e ".[agent,rag]"
 python -m iot_lab.agent
 ```
 
+The agent can also switch the ESP32's cooling relay when you tell it to ("turn
+the fan on"). It never does so on its own ("it's hot in here" gets a
+recommendation), and every attempt is logged to `logs/commands.jsonl`. This needs
+Mosquitto on the Pi and the ESP32 running
+[`ESP/esp32_mqtt/esp32_mqtt.ino`](ESP/esp32_mqtt/esp32_mqtt.ino) (onboard LED =
+the "relay" for the demo). Watch the traffic with:
+
+```shell
+mosquitto_sub -h localhost -t 'commands/#' -t 'sensors/esp32/ack' -v
+```
+
+Safety design: [ADR 0012](docs/adr/0012-command-and-control.md).
+
 ## 6. Tests and evals
 
 ```shell
