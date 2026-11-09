@@ -16,6 +16,11 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "requests",
+    "langchain",
+    "langchain-ollama",
+    "langchain-community",
+    "langgraph",
+    "pydantic",
 ]
 
 [project.optional-dependencies]
