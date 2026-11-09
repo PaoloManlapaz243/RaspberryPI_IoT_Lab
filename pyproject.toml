@@ -22,6 +22,8 @@ dependencies = [
 dev = ["pytest"]
 #Document retrieval (RAG): local vector store. Embeddings come from Ollama.
 rag = ["chromadb"]
+#LangGraph agent over the assistant's tools (ADR 0011). The model runs in Ollama.
+agent = ["langgraph", "langchain-core", "langchain-ollama"]
 #DHT11 sensor (Raspberry Pi only; also needs: sudo apt install swig python3-dev liblgpio-dev)
 pi = ["adafruit-circuitpython-dht"]
 

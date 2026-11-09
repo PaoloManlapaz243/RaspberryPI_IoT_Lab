@@ -76,11 +76,23 @@ python -m iot_lab.rag build
 
 How a question becomes a reply: [`docs/assistant-flow.md`](docs/assistant-flow.md).
 
+### The agent (multi-step questions)
+
+`iot_lab.agent` is a LangGraph agent that runs alongside the assistant and can
+use several tools for one question ("is it hot and is anyone here?"), including
+the docs. Design: [ADR 0011](docs/adr/0011-langgraph-agent.md).
+
+```shell
+pip install -e ".[agent,rag]"
+python -m iot_lab.agent
+```
+
 ## 6. Tests and evals
 
 ```shell
 pytest                                      # unit tests: fast, no Ollama or camera
 python evals/eval_assistant.py --held-out   # routing score: needs Ollama, takes minutes
+python evals/eval_agent.py --held-out       # agent tool-choice score: needs Ollama
 ```
 
 Why they're separate: [ADR 0008](docs/adr/0008-project-layout.md).

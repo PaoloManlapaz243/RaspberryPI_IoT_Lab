@@ -29,6 +29,10 @@ python -m iot_lab.main          # press 'q' in the preview window to quit
   `pip install -e ".[rag]"`, `ollama pull nomic-embed-text`, then
   `python -m iot_lab.rag build` (re-run after editing docs; the index is
   `logs/chroma/`, gitignored).
+- `python -m iot_lab.agent` runs the LangGraph agent (ADR 0011), alongside the
+  assistant: it chains tools for multi-part questions. `pip install -e ".[agent]"`.
+  `python evals/eval_agent.py [model] [--held-out] [--verbose]` scores its tool
+  choice (same two-set rule as the assistant eval).
 - `python evals/eval_assistant.py [model] [--held-out] [--no-guard] [--verbose]`
   scores the assistant's routing (accuracy, misroutes to chat, retries,
   latency). Run it before and after any prompt or model change; never tune
@@ -54,6 +58,7 @@ Up to six threads (camera, inference, event writer, AWS forwarder, DHT sensor, m
 | `DHTSensor` | `src/iot_lab/threads/dht_sensor.py` | Producer (if `ENABLE_DHT`): reads the DHT11 every 3 s and writes `readings` rows directly (no queue), waking the forwarder |
 | `AWSForwarder` | `src/iot_lab/threads/aws_forwarder.py` | Store-and-forward over streams (detections, readings): each reads rows after its own cursor, publishes in batches, advances the cursor only when the whole batch is acked |
 | `detection_assistant` | `src/iot_lab/detection_assistant.py` | **Separate process.** Read-only SQLite queries (the only code that reads data) + Ollama model that only routes questions to them and phrases results |
+| `agent` | `src/iot_lab/agent.py` | **Separate process**, alongside the assistant. LangGraph state machine (guard → plan → check → act → … → respond) over the assistant's functions, `rag.retrieve` and `latest_reading` as tools; bounded steps, hard allow-list |
 | `rag` | `src/iot_lab/rag.py` | Doc retrieval for the assistant's `docs` intent: chunks README/CLAUDE.md/`docs/**`, embeds with `nomic-embed-text`, stores in ChromaDB, `retrieve()` returns the nearest passages |
 | `AWSPublisher` | `src/iot_lab/aws_publisher.py` | paho-mqtt client, mutual TLS to IoT Core on 8883, QoS 1. Connects in the background; tracks acks for `wait_for_acks()` |
 
@@ -100,6 +105,10 @@ decision rather than editing an accepted one.
 - `0010-doc-retrieval.md`: RAG for how-to questions. A `docs` router intent;
   code retrieves passages (local ChromaDB + Ollama `nomic-embed-text`), the
   model answers only from them, with a file citation.
+- `0011-langgraph-agent.md`: LangGraph agent alongside the assistant. Explicit
+  graph with a JSON-schema planner (gemma2:2b has no native tool calling), a
+  `check` safety node (allow-list, `validate_call`, per-tool guard, dedupe),
+  bounded steps, tool output passed as escaped `<data>`.
 
 ## Current state (in progress)
 - Open issues, pending decisions, and next steps: `docs/open-issues.md`.
@@ -126,6 +135,8 @@ decision rather than editing an accepted one.
 - Adding an assistant function: update `FUNCTIONS`, `ALLOWED_ARGS` /
   `REQUIRED_ARGS`, the router prompt, eval cases, and check
   `UNSUPPORTED_PATTERNS` (ADRs 0004-0006).
+  The agent picks a new function up automatically (`TOOL_ARGS` is built from
+  them); add a `TOOL_DESCRIPTIONS` line and `eval_agent.py` cases.
 - Tests (ADR 0008): deterministic logic gets a unit test in `tests/`; model
   behaviour gets eval cases in `evals/`. Tests use `tmp_path` for databases
   and replace `_ollama` with canned replies; never touch `logs/events.db`.

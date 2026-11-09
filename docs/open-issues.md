@@ -59,6 +59,14 @@ Living list of known problems, pending decisions, and next steps. Last updated
     numbers here; check whether existing questions (e.g. "what kinds of
     things can you detect?") now misroute to `docs`.
 
+25. **Agent eval not yet run** (ADR 0011). `eval_agent.py` cases were written
+    before any run; record tuning + held-out scores here, and on the Pi.
+    Decide whether the agent needs its own gate before it's demoed.
+26. **Agent vs. assistant.** The agent runs alongside the assistant (decided
+    2026-11-09). Revisit once both are measured: if the agent covers the
+    router's cases at similar accuracy and acceptable Pi latency, retire the
+    router.
+
 ## Detector pipeline
 
 10. **Tracker overcount.** Each time the tracker loses a person, they count as
@@ -98,7 +106,8 @@ Living list of known problems, pending decisions, and next steps. Last updated
 21. **An existing Pi database** may have the first version's `readings` table
     without the JSON check. Once it's uploaded, drop it (see ADR 0009).
 22. **The assistant can't answer temperature questions yet.** That needs a
-    new function over `readings` (ADRs 0004–0007 checklist).
+    new function over `readings` (ADRs 0004–0007 checklist). The agent can
+    (`latest_reading`, ADR 0011); latest values only, no history or averages.
 
 ## Housekeeping
 
@@ -112,5 +121,5 @@ Living list of known problems, pending decisions, and next steps. Last updated
 1. Decide #1 (gate) and #2 (Ben's functions) with the group.
 2. #10 tracker tuning: it affects every count the assistant reports.
 3. #9 Pi measurement.
-4. Off-topic chat feature (once #1 is settled), then the LangGraph work
-   (the `langraph` branch was empty and is gone).
+4. Off-topic chat feature (once #1 is settled).
+5. Run and record `eval_agent.py` (#25).
